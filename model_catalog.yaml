@@ -1,0 +1,35 @@
+# model_catalog.yaml
+classification:
+  - name: logistic_regression
+    class_path: sklearn.linear_model.LogisticRegression
+    default_params: { max_iter: 1000, C: 1.0, n_jobs: -1 }
+    grid: { C: [0.1, 1.0, 10.0] }
+  - name: svm
+    class_path: sklearn.svm.SVC
+    default_params: { kernel: rbf, C: 1.0, gamma: scale }
+    grid: { C: [0.5, 1.0, 2.0], gamma: [scale, auto] }
+  - name: random_forest
+    class_path: sklearn.ensemble.RandomForestClassifier
+    default_params: { n_estimators: 300, max_depth: 12, n_jobs: -1 }
+    grid: { n_estimators: [200, 300, 500], max_depth: [8, 12, 16] }
+  - name: gradient_boosting
+    class_path: sklearn.ensemble.GradientBoostingClassifier
+    default_params: { n_estimators: 300, learning_rate: 0.05, max_depth: 3 }
+    grid: { n_estimators: [200, 300], learning_rate: [0.03, 0.05] }
+
+regression:
+  - name: linear_regression
+    class_path: sklearn.linear_model.LinearRegression
+    default_params: {}
+  - name: ridge
+    class_path: sklearn.linear_model.Ridge
+    default_params: { alpha: 1.0 }
+    grid: { alpha: [0.1, 1.0, 10.0] }
+  - name: lasso
+    class_path: sklearn.linear_model.Lasso
+    default_params: { alpha: 0.001, max_iter: 5000 }
+    grid: { alpha: [0.0005, 0.001, 0.01] }
+  - name: random_forest
+    class_path: sklearn.ensemble.RandomForestRegressor
+    default_params: { n_estimators: 400, max_depth: 14, n_jobs: -1 }
+    grid: { n_estimators: [300, 400, 600], max_depth: [10, 14, 18] }

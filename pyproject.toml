@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "my_project"
+version = "0.1.0"
+description = "HF 기반 다중 모델 학습/로깅/스토리지 파이프라인"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "pandas>=2.1.0",
+  "scikit-learn>=1.3.0",
+  "joblib>=1.3.0",
+  "mlflow>=2.14.0",
+  "huggingface_hub>=0.24.0",
+  "pyarrow>=15.0.0",
+  "boto3>=1.34.0",
+  "fastapi>=0.110.0",
+  "uvicorn[standard]>=0.27.0",
+  "pydantic-settings>=2.2.1",
+  "python-dotenv>=1.0.1",
+  "xgboost>=1.7.0",
+  "lightgbm>=4.0.0",
+  "catboost>=1.2.0",
+  "transformers>=4.40.0",
+  "optuna>=3.0.0",
+  "datasets>=2.20.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0.0", "httpx>=0.27.0"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+addopts = "-q"

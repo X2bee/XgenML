@@ -1,0 +1,20 @@
+dataset_id: churn_v2
+task: classification   # classification | regression | ranking | timeseries
+file: s3://bucket/datasets/churn_v2.parquet
+target_column: churn_label
+feature_columns:        # 명시 안하면 target 제외한 전 컬럼 사용
+  - tenure
+  - monthly_charges
+  - total_charges
+splits:                 # 선택: 파일 하나에서 분할
+  test_size: 0.2
+  val_size: 0.1
+schema:                 # 전처리된 최종 스키마(숫자/희소/카테고리 원핫 등)
+  tenure: float32
+  monthly_charges: float32
+  total_charges: float32
+  churn_label: int64
+label_map:              # 선택(분류): 원래 라벨↔정수 맵
+  "no": 0
+  "yes": 1
+stratify: true          # 분류 시 train_test_split stratify 적용
