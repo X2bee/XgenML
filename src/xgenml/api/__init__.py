@@ -36,7 +36,7 @@ def create_app() -> FastAPI:
     # CORS 미들웨어 추가
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["http://localhost:3000", "http://localhost:8080"],
+        allow_origins=["http://localhost:3000", "http://localhost:8080", 'https://xgen.x2bee.com'],
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
