@@ -271,24 +271,32 @@ class MLflowManager:
         logger.info(f"✅ 태그 저장 완료: {len(feature_names)}개 피처 + {len(version_info_tags)}개 버전 태그")
     
     def save_manifest(
-        self,
-        manifest: Dict[str, Any],
-        run_id: str
-        ) -> bool:
+    self,
+    manifest: Dict[str, Any],
+    run_id: str
+    ) -> bool:
         """Manifest를 MLflow 아티팩트로 저장"""
         logger.info("베스트 run에 manifest 저장 중 (MinIO)...")
         tmp_manifest = None
-        
+
         try:
+            # ✅ MLmodel S3 경로 추가
+            run = self.client.get_run(run_id)
+            artifact_uri = run.info.artifact_uri  # 예: s3://mlflow-artifacts/model_cls-test3/...
+            mlmodel_path = f"{artifact_uri}/model/MLmodel"
+            manifest["best_model_s3_path"] = mlmodel_path
+
             tmp_manifest = tempfile.NamedTemporaryFile(delete=False, suffix=".json").name
             with open(tmp_manifest, "w", encoding="utf-8") as f:
                 json.dump(manifest, f, ensure_ascii=False, indent=2)
             self.client.log_artifact(run_id, tmp_manifest, artifact_path="manifest")
-            logger.info("✅ Manifest 저장 완료 (MinIO)")
+            logger.info(f"✅ Manifest 저장 완료 (MinIO): {mlmodel_path}")
             return True
+
         except Exception as e:
             logger.error(f"⚠️  Manifest 저장 실패: {e}")
             return False
+
         finally:
             if tmp_manifest and os.path.exists(tmp_manifest):
                 os.unlink(tmp_manifest)
