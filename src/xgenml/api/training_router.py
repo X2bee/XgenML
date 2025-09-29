@@ -5,9 +5,9 @@ from typing import Dict
 import json
 import logging
 
-from ..models.schemas import TrainRequest, TrainResponse
-from ..services.training_service import TrainingService
-from ..services.async_training_service import async_training_service
+from src.xgenml.models.schemas import TrainRequest, TrainResponse
+from src.xgenml.services.training_service import TrainingService
+from src.xgenml.services.async_training_service import async_training_service
 from mlflow.tracking import MlflowClient
 
 router = APIRouter(prefix="/training", tags=["Training"])
@@ -51,9 +51,16 @@ async def train_sync(request: Request):
         result = training_service.run(
             model_id=req.model_id,
             task=req.task,
+            # HuggingFace
             hf_repo=req.hf_repo,
             hf_filename=req.hf_filename,
             hf_revision=req.hf_revision,
+            # MLflow (새로 추가)
+            use_mlflow_dataset=req.use_mlflow_dataset,
+            mlflow_run_id=req.mlflow_run_id,
+            mlflow_experiment_name=req.mlflow_experiment_name,
+            mlflow_artifact_path=req.mlflow_artifact_path,
+            # 나머지
             target_column=req.target_column,
             feature_columns=req.feature_columns,
             model_names=req.model_names,
@@ -62,7 +69,9 @@ async def train_sync(request: Request):
             validation_size=req.validation_size,
             use_cv=req.use_cv,
             cv_folds=req.cv_folds,
+            hpo_config=req.hpo_config,
         )
+
         
         logger.info(f"Training service returned: {type(result)}, {result}")
         
@@ -116,7 +125,6 @@ async def train_sync(request: Request):
 async def train_async(request: Request):
     """비동기 모델 학습 시작 - task_id 반환"""
     try:
-        # 기존과 동일한 요청 파싱 로직
         content_type = request.headers.get("content-type", "")
         
         if content_type == "text/plain":
@@ -130,13 +138,20 @@ async def train_async(request: Request):
         
         req = TrainRequest(**data)
         
-        # 비동기 학습 시작
+        # 비동기 학습 시작 (MLflow 파라미터 추가)
         task_id = async_training_service.start_async_training(
             model_id=req.model_id,
             task=req.task,
+            # HuggingFace
             hf_repo=req.hf_repo,
             hf_filename=req.hf_filename,
             hf_revision=req.hf_revision,
+            # MLflow (추가)
+            use_mlflow_dataset=req.use_mlflow_dataset,
+            mlflow_run_id=req.mlflow_run_id,
+            mlflow_experiment_name=req.mlflow_experiment_name,
+            mlflow_artifact_path=req.mlflow_artifact_path,
+            # 나머지
             target_column=req.target_column,
             feature_columns=req.feature_columns,
             model_names=req.model_names,
@@ -145,6 +160,7 @@ async def train_async(request: Request):
             validation_size=req.validation_size,
             use_cv=req.use_cv,
             cv_folds=req.cv_folds,
+            hpo_config=req.hpo_config,
         )
         
         return {

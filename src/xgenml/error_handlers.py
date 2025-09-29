@@ -6,7 +6,7 @@ from datetime import datetime
 import logging
 
 # XgenMLException import 추가
-from .exceptions import XgenMLException
+from src.xgenml.exceptions import XgenMLException
 
 logger = logging.getLogger(__name__)
 

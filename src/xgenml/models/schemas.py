@@ -10,21 +10,30 @@ class HyperparameterConfig(BaseModel):
 
 class TrainRequest(BaseModel):
     model_id: str
-    task: str = "classification"
+    task: str  # "classification" or "regression"
+    
+    # HuggingFace 데이터셋 (기존)
+    hf_repo: Optional[str] = None
+    hf_filename: Optional[str] = None
+    hf_revision: Optional[str] = None
+    
+    # MLflow 데이터셋 (새로 추가)
+    use_mlflow_dataset: bool = False
+    mlflow_run_id: Optional[str] = None
+    mlflow_experiment_name: Optional[str] = None
+    mlflow_artifact_path: str = "dataset"
+    
+    target_column: str
+    feature_columns: Optional[List[str]] = None
+    model_names: List[str]
+    overrides: Optional[Dict[str, Dict[str, Any]]] = None
     test_size: float = 0.2
     validation_size: float = 0.1
     use_cv: bool = False
     cv_folds: int = 5
-    hf_repo: str
-    hf_filename: str
-    hf_revision: Optional[str] = None
-    target_column: str
-    feature_columns: Optional[List[str]] = None
-    model_names: List[str]
-    overrides: Optional[Dict[str, Any]] = None
     
-    # HPO 설정 추가
-    hpo_config: Optional[HyperparameterConfig] = None
+    # HPO 설정 (기존)
+    hpo_config: Optional[Dict[str, Any]] = None
 
 class TrainResponse(BaseModel):
     run_id: str

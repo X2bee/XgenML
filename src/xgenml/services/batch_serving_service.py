@@ -3,7 +3,7 @@ import asyncio
 import pandas as pd
 from typing import List, Dict, Any, AsyncGenerator
 import logging
-from .serving_service import ServingService
+from src.xgenml.services.serving_service import ServingService
 
 logger = logging.getLogger(__name__)
 

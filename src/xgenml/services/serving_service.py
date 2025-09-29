@@ -10,8 +10,8 @@ import joblib
 from mlflow.tracking import MlflowClient
 from sklearn.preprocessing import LabelEncoder
 
-from .model_cache import model_cache
-from ..exceptions import ModelNotFoundError, ValidationError, PredictionError
+from src.xgenml.services.model_cache import model_cache
+from src.xgenml.exceptions import ModelNotFoundError, ValidationError, PredictionError
 
 logger = logging.getLogger(__name__)
 

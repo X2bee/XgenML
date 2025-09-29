@@ -6,7 +6,7 @@ from sklearn.model_selection import cross_val_score
 from sklearn.metrics import accuracy_score, r2_score
 import numpy as np
 
-from ..core.model_provider import create_estimator
+from src.xgenml.core.model_provider import create_estimator
 
 logger = logging.getLogger(__name__)
 

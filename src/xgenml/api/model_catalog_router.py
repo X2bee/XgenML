@@ -31,7 +31,7 @@ def get_model_catalog(
             catalog = get_models_by_tag(tag)
         elif task:
             # 태스크로 필터링
-            if task not in ["classification", "regression"]:
+            if task not in ["classification", "regression", "clustering", 'anomaly_detection' , 'timeseries']:
                 raise HTTPException(
                     status_code=400, 
                     detail="Task must be either 'classification' or 'regression'"
@@ -70,7 +70,7 @@ def get_model_catalog(
 def get_models_for_task(task: str):
     """특정 태스크의 사용 가능한 모델들을 반환합니다."""
     
-    if task not in ["classification", "regression"]:
+    if task not in ["classification", "regression", "clustering", 'anomaly_detection' , 'timeseries']:
         raise HTTPException(
             status_code=400,
             detail="Task must be either 'classification' or 'regression'"
@@ -90,7 +90,7 @@ def get_models_for_task(task: str):
 def get_model_details(task: str, model_name: str):
     """특정 모델의 상세 정보를 반환합니다."""
     
-    if task not in ["classification", "regression"]:
+    if task not in ["classification", "regression", "clustering", 'anomaly_detection' , 'timeseries']:
         raise HTTPException(
             status_code=400,
             detail="Task must be either 'classification' or 'regression'"
