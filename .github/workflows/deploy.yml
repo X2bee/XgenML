@@ -1,0 +1,47 @@
+# .github/workflows/deploy.yml (새로 생성)
+name: Auto Deploy to Self-Hosted Runner
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:  # 수동 실행 옵션
+
+jobs:
+  deploy:
+    runs-on: self-hosted
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Stop current application
+        run: |
+          pm2 stop xgenml || echo "Application not running"
+          pm2 delete xgenml || echo "Application not in pm2"
+      
+      - name: Update code in container
+        run: |
+          cd /xgenml
+          git fetch origin
+          git reset --hard origin/main
+          git clean -fd
+      
+      - name: Install/Update dependencies
+        run: |
+          cd /xgenml
+          pip install --upgrade pip
+          pip install --no-cache-dir -e .
+      
+      - name: Start application
+        run: |
+          cd /xgenml
+          pm2 start "uvicorn src.xgenml.api:app --host 0.0.0.0 --port 8001 --workers 2" --name "xgenml"
+          pm2 save
+      
+      - name: Health check
+        run: |
+          sleep 10
+          curl -fsS "http://localhost:8001/openapi.json" || exit 1
+      
+      - name: Deployment status
+        run: pm2 status
