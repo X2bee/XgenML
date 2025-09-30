@@ -498,3 +498,95 @@ class DataLoader:
             "label_mapping": self.label_mapping,
             "encoder": self.label_encoder
         }
+
+    # Add to DataLoader class
+
+    def get_input_schema(self, X, feature_names: List[str]) -> Dict[str, Any]:
+        """입력 데이터 스키마 생성"""
+        import pandas as pd
+        import numpy as np
+        
+        schema = {
+            "n_features": len(feature_names),
+            "feature_names": feature_names,
+            "features": []
+        }
+        
+        # 각 피처의 데이터 타입 및 통계 정보
+        df = pd.DataFrame(X, columns=feature_names) if not isinstance(X, pd.DataFrame) else X
+        
+        for col in feature_names:
+            feature_info = {
+                "name": col,
+                "dtype": str(df[col].dtype),
+                "nullable": bool(df[col].isnull().any()),
+                "null_count": int(df[col].isnull().sum())
+            }
+            
+            # 수치형 데이터
+            if pd.api.types.is_numeric_dtype(df[col]):
+                feature_info.update({
+                    "type": "numeric",
+                    "min": float(df[col].min()),
+                    "max": float(df[col].max()),
+                    "mean": float(df[col].mean()),
+                    "std": float(df[col].std()),
+                    "median": float(df[col].median())
+                })
+            # 범주형 데이터
+            elif pd.api.types.is_categorical_dtype(df[col]) or df[col].dtype == object:
+                unique_vals = df[col].unique()
+                feature_info.update({
+                    "type": "categorical",
+                    "n_unique": len(unique_vals),
+                    "categories": unique_vals.tolist()[:100]  # 처음 100개만
+                })
+            
+            schema["features"].append(feature_info)
+        
+        return schema
+
+    def get_output_schema(self, y, task: str, label_encoding_info: Optional[Dict] = None) -> Dict[str, Any]:
+        """출력 데이터 스키마 생성"""
+        import pandas as pd
+        import numpy as np
+        
+        schema = {
+            "type": task,
+            "shape": y.shape if hasattr(y, 'shape') else (len(y),)
+        }
+        
+        if task == "classification":
+            if label_encoding_info and label_encoding_info.get("used"):
+                # 라벨 인코딩이 적용된 경우
+                schema.update({
+                    "n_classes": len(label_encoding_info["original_classes"]),
+                    "class_names": label_encoding_info["original_classes"],
+                    "encoded": True,
+                    "label_mapping": label_encoding_info["label_mapping"]
+                })
+            else:
+                # 원본 라벨
+                unique_classes = pd.Series(y).unique().tolist()
+                schema.update({
+                    "n_classes": len(unique_classes),
+                    "class_names": unique_classes,
+                    "encoded": False
+                })
+        
+        elif task == "regression":
+            y_series = pd.Series(y)
+            schema.update({
+                "min": float(y_series.min()),
+                "max": float(y_series.max()),
+                "mean": float(y_series.mean()),
+                "std": float(y_series.std())
+            })
+        
+        elif task == "clustering":
+            schema.update({
+                "n_samples": len(y) if y is not None else 0,
+                "unsupervised": y is None
+            })
+        
+        return schema

@@ -26,16 +26,12 @@ logger = setup_logger(__name__)
 def train_from_hf(
     model_id: str,
     task: str,
-    # HuggingFace 관련
     hf_repo: Optional[str] = None,
     hf_filename: Optional[str] = None,
-    # /src/xgenml/core/train_many.py (계속)
     hf_revision: Optional[str] = None,
-    # MLflow 관련
     use_mlflow_dataset: bool = False,
     mlflow_run_id: Optional[str] = None,
     mlflow_artifact_path: str = "dataset",
-    # 데이터 관련
     target_column: Optional[str] = None,
     feature_columns: Optional[List[str]] = None,
     model_names: Optional[List[str]] = None,
@@ -45,13 +41,10 @@ def train_from_hf(
     random_state: int = 42,
     use_cv: bool = False,
     cv_folds: int = 5,
-    # MLflow 실험 관련
     mlflow_experiment: Optional[str] = None,
     artifact_base_uri: Optional[str] = None,
     storage_ctor_kwargs: Optional[Dict[str, Any]] = None,
-    # HPO 관련
     hpo_config: Optional[Dict[str, Any]] = None,
-    # 태스크별 설정
     task_config: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """
@@ -80,9 +73,6 @@ def train_from_hf(
         storage_ctor_kwargs: 스토리지 생성자 kwargs
         hpo_config: 하이퍼파라미터 최적화 설정
         task_config: 태스크별 설정
-            - timeseries: {"lookback_window": 10, "forecast_horizon": 1, "time_column": "date"}
-            - anomaly_detection: {"contamination": 0.1}
-            - clustering: {"n_clusters": 3}
     
     Returns:
         학습 결과 딕셔너리
@@ -90,28 +80,26 @@ def train_from_hf(
     training_start_time = time.time()
     execution_id = f"{model_id}_{uuid.uuid4().hex[:8]}_{int(time.time())}"
     
-    # 환경 설정
     USE_UNIQUE_PATHS = os.getenv("MLFLOW_USE_UNIQUE_PATHS", "true").lower() == "true"
     CLEANUP_TEMP_FILES = os.getenv("MLFLOW_CLEANUP_TEMP", "true").lower() == "true"
     temp_manager = TempDirectoryManager(cleanup_enabled=CLEANUP_TEMP_FILES)
     
     logger.info("=" * 80)
-    logger.info("🚀 모델 학습 시작")
+    logger.info("모델 학습 시작")
     logger.info("=" * 80)
-    logger.info(f"🆔 고유 실행 ID: {execution_id}")
+    logger.info(f"고유 실행 ID: {execution_id}")
+    
+    input_schema = None
+    output_schema = None
     
     try:
-        # ========================================
-        # 1. 태스크 검증
-        # ========================================
         available_tasks = get_available_tasks()
         if task not in available_tasks:
             raise ValueError(
-                f"Unknown task: {task}\n"
-                f"Available tasks: {available_tasks}"
+                f"Unknown task: {task}\nAvailable tasks: {available_tasks}"
             )
         
-        logger.info(f"\n📋 학습 설정:")
+        logger.info(f"\n학습 설정:")
         logger.info(f"  - Model ID: {model_id}")
         logger.info(f"  - Execution ID: {execution_id}")
         logger.info(f"  - Task: {task}")
@@ -140,28 +128,22 @@ def train_from_hf(
         if hpo_config:
             logger.info(f"  - HPO Config: {hpo_config}")
         
-        # ========================================
-        # 2. 모델 목록 검증
-        # ========================================
         if not model_names:
-            # 태스크별 기본 모델 사용
             available_models = [m["name"] for m in get_models_by_task(task)]
-            model_names = available_models[:3]  # 상위 3개
+            model_names = available_models[:3]
             logger.info(f"\n모델 미지정, 태스크 '{task}' 기본 모델 사용: {model_names}")
         
-        # 모델 유효성 검증 및 필수 패키지 확인
         validated_models = []
         for name in model_names:
             if not validate_model_name(task, name):
-                logger.warning(f"⚠️  '{name}'은 태스크 '{task}'에 사용할 수 없습니다. 건너뜁니다.")
+                logger.warning(f"'{name}'은 태스크 '{task}'에 사용할 수 없습니다. 건너뜁니다.")
                 continue
             
-            # 패키지 요구사항 확인
             req_check = check_model_requirements(task, name)
             if not req_check["available"]:
                 missing = req_check['missing_packages']
                 logger.warning(
-                    f"⚠️  '{name}' 필요 패키지 누락: {missing}. 건너뜁니다.\n"
+                    f"'{name}' 필요 패키지 누락: {missing}. 건너뜁니다.\n"
                     f"    설치: pip install {' '.join(missing)}"
                 )
                 continue
@@ -170,33 +152,23 @@ def train_from_hf(
         
         if not validated_models:
             raise ValueError(
-                f"사용 가능한 모델이 없습니다.\n"
-                f"태스크: {task}\n"
-                f"요청 모델: {model_names}\n"
-                f"필요한 패키지를 설치했는지 확인하세요."
+                f"사용 가능한 모델이 없습니다.\n태스크: {task}\n"
+                f"요청 모델: {model_names}\n필요한 패키지를 설치했는지 확인하세요."
             )
         
         model_names = validated_models
-        logger.info(f"✅ 검증된 모델: {model_names}")
+        logger.info(f"검증된 모델: {model_names}")
         
-        # Primary metric 자동 설정
         best_key = get_primary_metric(task)
         logger.info(f"평가 지표: {best_key}")
         
-        # ========================================
-        # 3. MLflow 설정
-        # ========================================
         _setup_mlflow()
         
-        # 실험 이름 및 MLflow 매니저 생성
         experiment_name = _get_experiment_name(
             mlflow_experiment, model_id, execution_id, USE_UNIQUE_PATHS
         )
         mlflow_manager = MLflowManager(experiment_name)
         
-        # ========================================
-        # 4. 데이터 로드
-        # ========================================
         data_loader = DataLoader(task=task, task_config=task_config)
         df, data_source_info = data_loader.load_data(
             use_mlflow_dataset=use_mlflow_dataset,
@@ -207,18 +179,12 @@ def train_from_hf(
             hf_revision=hf_revision
         )
         
-        # ========================================
-        # 5. 피처 준비
-        # ========================================
         X, y, feature_names, task_metadata = data_loader.prepare_features(
             df=df,
             target_column=target_column,
             feature_columns=feature_columns
         )
         
-        # ========================================
-        # 6. 데이터 분할
-        # ========================================
         X_train, X_val, X_test, y_train, y_val, y_test = data_loader.split_data(
             X=X, y=y,
             test_size=test_size,
@@ -226,16 +192,18 @@ def train_from_hf(
             random_state=random_state
         )
         
-        # 라벨 인코딩 정보
         label_encoding_info = data_loader.get_label_encoding_info()
         
-        # ========================================
-        # 7. HPO 설정
-        # ========================================
+        logger.info("\nInput/Output 스키마 생성 중...")
+        input_schema = data_loader.get_input_schema(X_train, feature_names)
+        output_schema = data_loader.get_output_schema(y_train, task, label_encoding_info)
+        logger.info(f"  - Input: {input_schema['n_features']} features")
+        logger.info(f"  - Output: {output_schema['type']}")
+        
         optimizer = None
         use_hpo = hpo_config and hpo_config.get('enable_hpo', False)
         if use_hpo:
-            logger.info("\n🎯 하이퍼파라미터 최적화 활성화")
+            logger.info("\n하이퍼파라미터 최적화 활성화")
             optimizer = HyperparameterOptimizer(
                 n_trials=hpo_config.get('n_trials', 50),
                 timeout=hpo_config.get('timeout_minutes', None) * 60 
@@ -245,9 +213,6 @@ def train_from_hf(
             if hpo_config.get('timeout_minutes'):
                 logger.info(f"  - Timeout: {hpo_config.get('timeout_minutes')} minutes")
         
-        # ========================================
-        # 8. 모델 학습
-        # ========================================
         trainer = ModelTrainer(task, mlflow_manager, USE_UNIQUE_PATHS)
         if optimizer:
             trainer.set_optimizer(optimizer)
@@ -256,7 +221,7 @@ def train_from_hf(
         best = None
         best_score = -1e18 if task == "regression" else -1.0
         
-        logger.info(f"\n🤖 모델 학습 시작 ({len(model_names)}개 모델)")
+        logger.info(f"\n모델 학습 시작 ({len(model_names)}개 모델)")
         logger.info(f"평가 지표: {best_key}")
         
         for idx, name in enumerate(model_names, 1):
@@ -276,34 +241,32 @@ def train_from_hf(
                     use_cv=use_cv,
                     cv_folds=cv_folds,
                     overrides=overrides,
-                    hpo_config=hpo_config
+                    hpo_config=hpo_config,
+                    input_schema=input_schema,
+                    output_schema=output_schema
                 )
                 
                 results.append(summary)
                 
-                # 베스트 모델 업데이트
                 score = summary["metrics"]["test"][best_key]
                 if score > best_score:
                     best_score = score
                     best = summary
                     hpo_info = f" (HPO)" if summary.get("hpo_used") else ""
-                    logger.info(f"🏆 새로운 베스트 모델: {name}{hpo_info} ({best_key}={score:.4f})")
+                    logger.info(f"새로운 베스트 모델: {name}{hpo_info} ({best_key}={score:.4f})")
                 
             except Exception as e:
-                logger.error(f"❌ {name} 모델 학습 실패: {str(e)}")
+                logger.error(f"{name} 모델 학습 실패: {str(e)}")
                 import traceback
                 logger.error(traceback.format_exc())
                 continue
         
-        # ========================================
-        # 9. 결과 검증
-        # ========================================
         if not best:
             raise RuntimeError("모든 모델 학습이 실패했습니다")
         
         hpo_info = f" (HPO)" if best.get("hpo_used") else ""
         logger.info(f"\n{'=' * 80}")
-        logger.info(f"🏆 최고 성능 모델: {best['algorithm']}{hpo_info}")
+        logger.info(f"최고 성능 모델: {best['algorithm']}{hpo_info}")
         logger.info(f"Run ID: {best['run_id']}")
         logger.info(f"최고 {best_key}: {best_score:.4f}")
         logger.info(f"{'=' * 80}")
@@ -311,9 +274,6 @@ def train_from_hf(
         if best.get("hpo_used") and best.get("hpo_results"):
             logger.info(f"HPO 최적 파라미터: {best['final_params']}")
         
-        # ========================================
-        # 10. Manifest 생성 및 저장
-        # ========================================
         manifest = _create_manifest(
             results=results,
             best=best,
@@ -328,14 +288,18 @@ def train_from_hf(
             label_encoding_info=label_encoding_info,
             task_metadata=task_metadata,
             USE_UNIQUE_PATHS=USE_UNIQUE_PATHS,
-            CLEANUP_TEMP_FILES=CLEANUP_TEMP_FILES
+            CLEANUP_TEMP_FILES=CLEANUP_TEMP_FILES,
+            input_schema=input_schema,
+            output_schema=output_schema
         )
         
-        mlflow_manager.save_manifest(manifest, best["run_id"])
+        manifest_saved = mlflow_manager.save_manifest(manifest, best["run_id"])
+
+        if not manifest_saved:
+            logger.warning("⚠️ Manifest 저장 실패 - 계속 진행")
+        else:
+            logger.info("✅ Manifest 저장 성공")
         
-        # ========================================
-        # 11. Model Registry 등록
-        # ========================================
         production_version = None
         version_tags = {}
         
@@ -349,7 +313,9 @@ def train_from_hf(
                 best=best,
                 label_encoding_info=label_encoding_info,
                 task_metadata=task_metadata,
-                USE_UNIQUE_PATHS=USE_UNIQUE_PATHS
+                USE_UNIQUE_PATHS=USE_UNIQUE_PATHS,
+                input_schema=input_schema,
+                output_schema=output_schema
             )
             
             production_version = mlflow_manager.register_best_model(
@@ -359,13 +325,10 @@ def train_from_hf(
                 version_tags=version_tags
             )
         elif not best.get("model_saved", False):
-            logger.warning("⚠️  베스트 모델의 아티팩트가 저장되지 않아 Model Registry 등록을 건너뜁니다")
+            logger.warning("베스트 모델의 아티팩트가 저장되지 않아 Model Registry 등록을 건너뜁니다")
         else:
-            logger.info("ℹ️  Model Registry 비활성화됨 (ENABLE_MODEL_REGISTRY=false)")
+            logger.info("Model Registry 비활성화됨 (ENABLE_MODEL_REGISTRY=false)")
         
-        # ========================================
-        # 12. 학습 완료 요약
-        # ========================================
         _log_training_summary(
             execution_id=execution_id,
             num_results=len(results),
@@ -378,12 +341,11 @@ def train_from_hf(
             model_id=model_id,
             training_start_time=training_start_time,
             task=task,
-            task_metadata=task_metadata
+            task_metadata=task_metadata,
+            input_schema=input_schema,
+            output_schema=output_schema
         )
         
-        # ========================================
-        # 13. 반환 데이터 생성
-        # ========================================
         return _create_return_data(
             results=results,
             best=best,
@@ -400,13 +362,15 @@ def train_from_hf(
             task_metadata=task_metadata,
             USE_UNIQUE_PATHS=USE_UNIQUE_PATHS,
             CLEANUP_TEMP_FILES=CLEANUP_TEMP_FILES,
-            task=task
+            task=task,
+            input_schema=input_schema,
+            output_schema=output_schema
         )
         
     except Exception as e:
         total_duration = time.time() - training_start_time
         logger.error(f"\n{'=' * 80}")
-        logger.error(f"💥 학습 실패! ({total_duration:.2f}초)")
+        logger.error(f"학습 실패! ({total_duration:.2f}초)")
         logger.error(f"{'=' * 80}")
         logger.error(f"실행 ID: {execution_id}")
         logger.error(f"에러: {str(e)}")
@@ -417,20 +381,15 @@ def train_from_hf(
         raise
     
     finally:
-        # 임시 디렉토리 정리
         temp_manager.cleanup()
 
 
-# ============================================================================
-# Helper Functions
-# ============================================================================
-
 def _setup_mlflow():
     """MLflow 기본 설정"""
-    logger.info("\n🔧 MLflow 설정 중...")
+    logger.info("\nMLflow 설정 중...")
     tracking_uri = os.getenv("MLFLOW_TRACKING_URI", "")
     if not tracking_uri:
-        logger.warning("⚠️  MLFLOW_TRACKING_URI 환경변수가 설정되지 않음")
+        logger.warning("MLFLOW_TRACKING_URI 환경변수가 설정되지 않음")
         raise ValueError("MLFLOW_TRACKING_URI 환경변수가 필요합니다")
     
     logger.info(f"MLflow Tracking URI: {tracking_uri}")
@@ -443,7 +402,7 @@ def _setup_mlflow():
     if s3_endpoint:
         logger.info(f"S3 Endpoint (MinIO): {s3_endpoint}")
     
-    logger.info("✅ MLflow 설정 완료")
+    logger.info("MLflow 설정 완료")
 
 
 def _get_experiment_name(
@@ -462,18 +421,18 @@ def _get_experiment_name(
 def _create_manifest(
     results, best, feature_names, model_id, execution_id, task,
     training_start_time, data_source_info, use_hpo, hpo_config,
-    label_encoding_info, task_metadata, USE_UNIQUE_PATHS, CLEANUP_TEMP_FILES
+    label_encoding_info, task_metadata, USE_UNIQUE_PATHS, CLEANUP_TEMP_FILES,
+    input_schema, output_schema
 ) -> Dict[str, Any]:
     """Manifest 생성"""
-    logger.info("\n📄 Manifest 생성 중...")
+    logger.info("\nManifest 생성 중...")
     
-    # JSON 직렬화 가능하도록 처리
     serializable_results = []
     for result in results:
         result_copy = result.copy()
         if result_copy.get('hpo_results'):
             hpo_copy = result_copy['hpo_results'].copy()
-            hpo_copy.pop('study', None)  # Optuna Study 객체 제거
+            hpo_copy.pop('study', None)
             result_copy['hpo_results'] = hpo_copy
         serializable_results.append(result_copy)
     
@@ -487,6 +446,8 @@ def _create_manifest(
         "results": serializable_results,
         "best": best_copy,
         "feature_names": feature_names,
+        "input_schema": input_schema,
+        "output_schema": output_schema,
         "model_id": model_id,
         "execution_id": execution_id,
         "task": task,
@@ -512,9 +473,11 @@ def _create_manifest(
 def _create_version_tags(
     execution_id, data_source_info, use_mlflow_dataset,
     mlflow_run_id, hf_repo, best, label_encoding_info,
-    task_metadata, USE_UNIQUE_PATHS
+    task_metadata, USE_UNIQUE_PATHS, input_schema, output_schema
 ) -> Dict[str, str]:
     """모델 버전 태그 생성"""
+    import json
+    
     version_tags = {
         "execution_id": execution_id,
         "training_timestamp": datetime.now().isoformat(),
@@ -535,10 +498,21 @@ def _create_version_tags(
         version_tags["label_encoded"] = "true"
         version_tags["num_classes"] = str(len(label_encoding_info.get("original_classes", [])))
     
-    # 태스크 메타데이터 추가
+    if input_schema:
+        version_tags["input_n_features"] = str(input_schema.get("n_features", 0))
+        version_tags["input_feature_names"] = json.dumps(
+            input_schema.get("feature_names", [])[:10],
+            ensure_ascii=False
+        )
+    
+    if output_schema:
+        version_tags["output_type"] = output_schema.get("type", "unknown")
+        if output_schema.get("type") == "classification":
+            version_tags["output_n_classes"] = str(output_schema.get("n_classes", 0))
+    
     if task_metadata:
         for key, value in task_metadata.items():
-            if key not in ["encoder", "label_mapping"]:  # 직렬화 불가 객체 제외
+            if key not in ["encoder", "label_mapping"]:
                 version_tags[f"task_{key}"] = str(value)
     
     return version_tags
@@ -547,19 +521,29 @@ def _create_version_tags(
 def _log_training_summary(
     execution_id, num_results, best, data_source_info,
     use_hpo, results, label_encoding_info, production_version,
-    model_id, training_start_time, task, task_metadata
+    model_id, training_start_time, task, task_metadata,
+    input_schema, output_schema
 ):
     """학습 완료 요약 로깅"""
     total_duration = time.time() - training_start_time
     
     logger.info(f"\n{'=' * 80}")
-    logger.info(f"🎉 전체 학습 완료! ({total_duration:.2f}초)")
+    logger.info(f"전체 학습 완료! ({total_duration:.2f}초)")
     logger.info(f"{'=' * 80}")
     logger.info(f"실행 ID: {execution_id}")
     logger.info(f"태스크: {task}")
     logger.info(f"학습된 모델 수: {num_results}")
     logger.info(f"베스트 모델: {best['algorithm']}")
     logger.info(f"데이터 소스: {data_source_info['source_type']}")
+    
+    if input_schema:
+        logger.info(f"입력 피처 수: {input_schema.get('n_features', 0)}")
+    if output_schema:
+        output_type = output_schema.get('type', 'unknown')
+        if output_type == 'classification':
+            logger.info(f"출력 타입: {output_type} ({output_schema.get('n_classes', 0)} classes)")
+        else:
+            logger.info(f"출력 타입: {output_type}")
     
     if use_hpo:
         hpo_count = sum(1 for r in results if r.get("hpo_used", False))
@@ -569,7 +553,6 @@ def _log_training_summary(
         original_classes = label_encoding_info.get("original_classes", [])
         logger.info(f"라벨 인코딩 적용: {original_classes} -> {list(range(len(original_classes)))}")
     
-    # 태스크별 메타데이터 로깅
     if task == "timeseries":
         logger.info(f"시계열 설정: lookback={task_metadata.get('lookback_window')}, "
                    f"horizon={task_metadata.get('forecast_horizon')}")
@@ -589,7 +572,8 @@ def _create_return_data(
     results, best, execution_id, model_id, production_version,
     version_tags, training_start_time, feature_names,
     data_source_info, use_hpo, hpo_config, label_encoding_info,
-    task_metadata, USE_UNIQUE_PATHS, CLEANUP_TEMP_FILES, task
+    task_metadata, USE_UNIQUE_PATHS, CLEANUP_TEMP_FILES, task,
+    input_schema, output_schema
 ) -> Dict[str, Any]:
     """반환 데이터 생성"""
     return {
@@ -604,6 +588,8 @@ def _create_return_data(
         },
         "training_duration": time.time() - training_start_time,
         "feature_names": feature_names,
+        "input_schema": input_schema,
+        "output_schema": output_schema,
         "training_timestamp": datetime.now().isoformat(),
         "data_source": data_source_info,
         "task": task,

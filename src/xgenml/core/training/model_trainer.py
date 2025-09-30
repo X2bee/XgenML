@@ -42,7 +42,9 @@ class ModelTrainer:
         use_cv: bool = False,
         cv_folds: int = 5,
         overrides: Optional[Dict[str, Any]] = None,
-        hpo_config: Optional[Dict[str, Any]] = None
+        hpo_config: Optional[Dict[str, Any]] = None,
+        input_schema: Optional[Dict[str, Any]] = None,  # NEW
+        output_schema: Optional[Dict[str, Any]] = None  # NEW
     ) -> Dict[str, Any]:
         """단일 모델 학습"""
         model_start_time = time.time()
@@ -84,17 +86,19 @@ class ModelTrainer:
             params_to_log.update(model_params)
             
             run_id, model_saved = self.mlflow_manager.log_model_training(
-                run_name=run_name,
-                estimator=estimator,
-                params=params_to_log,
-                metrics=metrics,
-                X_train=X_train,
-                y_pred_test=estimator.predict(X_test),
-                execution_id=execution_id,
-                data_source_info=data_source_info,
-                label_encoding_info=label_encoding_info,
-                hpo_results=hpo_results
-            )
+                    run_name=run_name,
+                    estimator=estimator,
+                    params=params_to_log,
+                    metrics=metrics,
+                    X_train=X_train,
+                    y_pred_test=estimator.predict(X_test),
+                    execution_id=execution_id,
+                    data_source_info=data_source_info,
+                    label_encoding_info=label_encoding_info,
+                    hpo_results=hpo_results,
+                    input_schema=input_schema,  # NEW
+                    output_schema=output_schema  # NEW
+                )
             
             # 결과 요약
             summary = {
