@@ -3,6 +3,7 @@ from sklearn.metrics import (
     accuracy_score, precision_recall_fscore_support,
     mean_squared_error, r2_score
 )
+import numpy as np
 
 def classification_metrics(y_true, y_pred) -> Dict[str, float]:
     acc = accuracy_score(y_true, y_pred)
@@ -17,10 +18,17 @@ def classification_metrics(y_true, y_pred) -> Dict[str, float]:
     }
 
 def regression_metrics(y_true, y_pred) -> Dict[str, float]:
+    """회귀 평가 지표 계산"""
     mse = mean_squared_error(y_true, y_pred)
-    rmse = mean_squared_error(y_true, y_pred, squared=False)
+    rmse = np.sqrt(mse)  # squared 파라미터 대신 직접 계산
     r2 = r2_score(y_true, y_pred)
-    return {"mse": float(mse), "rmse": float(rmse), "r2": float(r2)}
+    
+    return {
+        "mse": float(mse), 
+        "rmse": float(rmse), 
+        "r2": float(r2)
+    }
+
 
 def timeseries_metrics(y_true, y_pred) -> Dict[str, float]:
     """시계열 예측 메트릭"""

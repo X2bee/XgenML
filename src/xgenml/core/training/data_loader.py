@@ -37,6 +37,10 @@ class DataLoader:
         self.label_encoder: Optional[LabelEncoder] = None
         self.label_mapping: Optional[Dict] = None
         self.original_classes: Optional[List] = None
+        
+        # 피처 인코딩 관련 (추가)
+        self.feature_encoders: Dict[str, LabelEncoder] = {}
+        self.feature_encoding_info: Dict[str, Dict] = {}
     
     def load_data(
         self,
@@ -149,6 +153,42 @@ class DataLoader:
         else:
             raise ValueError(f"Unknown task: {self.task}")
     
+    def _encode_categorical_features(self, X: pd.DataFrame) -> pd.DataFrame:
+        """피처의 범주형 데이터 인코딩"""
+        categorical_columns = X.select_dtypes(include=['object', 'category']).columns.tolist()
+        
+        if not categorical_columns:
+            logger.info("범주형 피처 없음 - 인코딩 건너뜀")
+            return X
+        
+        logger.info(f"🔄 범주형 피처 인코딩 시작: {categorical_columns}")
+        
+        X_encoded = X.copy()
+        
+        for col in categorical_columns:
+            le = LabelEncoder()
+            # 결측치 처리
+            valid_mask = X[col].notna()
+            X_encoded.loc[valid_mask, col] = le.fit_transform(X[col][valid_mask].astype(str))
+            
+            # 인코더 저장
+            self.feature_encoders[col] = le
+            
+            # 인코딩 정보 저장
+            unique_values = X[col].unique()[:10]  # 처음 10개만
+            self.feature_encoding_info[col] = {
+                "original_values": [str(v) for v in unique_values if pd.notna(v)],
+                "encoded_values": le.transform([str(v) for v in unique_values if pd.notna(v)]).tolist(),
+                "n_unique": len(le.classes_),
+                "classes": le.classes_.tolist()
+            }
+            
+            logger.info(f"  ✓ {col}: {unique_values[:3]}... → 숫자 인코딩 ({len(le.classes_)} 고유값)")
+        
+        logger.info(f"✅ 범주형 피처 인코딩 완료: {len(categorical_columns)}개 컬럼")
+        
+        return X_encoded
+    
     def _prepare_classification(
         self, df: pd.DataFrame, target_column: str, feature_columns: Optional[List[str]]
     ) -> Tuple[pd.DataFrame, np.ndarray, List[str], Dict[str, Any]]:
@@ -160,16 +200,19 @@ class DataLoader:
         
         # 피처 선택
         if feature_columns:
-            X = df[feature_columns]
+            X = df[feature_columns].copy()
         else:
-            X = df.drop(columns=[target_column])
+            X = df.drop(columns=[target_column]).copy()
+        
+        # 범주형 피처 인코딩
+        X = self._encode_categorical_features(X)
         
         y = df[target_column]
         
         # 라벨 인코딩
         metadata = {}
         if y.dtype == 'object':
-            logger.info("라벨 인코딩 수행")
+            logger.info("타겟 라벨 인코딩 수행")
             y = self._encode_labels(y)
             metadata = {
                 "label_encoded": True,
@@ -179,6 +222,11 @@ class DataLoader:
             }
         else:
             metadata = {"label_encoded": False}
+        
+        # 피처 인코딩 정보 추가
+        if self.feature_encoders:
+            metadata["feature_encoding"] = self.feature_encoding_info
+            metadata["feature_encoders"] = self.feature_encoders
         
         feature_names = X.columns.tolist()
         logger.info(f"피처 형태: {X.shape}, 타겟 형태: {y.shape}")
@@ -195,14 +243,23 @@ class DataLoader:
         self._log_target_info(df, target_column)
         
         if feature_columns:
-            X = df[feature_columns]
+            X = df[feature_columns].copy()
         else:
-            X = df.drop(columns=[target_column])
+            X = df.drop(columns=[target_column]).copy()
+        
+        # 범주형 피처 인코딩
+        X = self._encode_categorical_features(X)
         
         y = df[target_column].values
         feature_names = X.columns.tolist()
         
         metadata = {"label_encoded": False}
+        
+        # 피처 인코딩 정보 추가
+        if self.feature_encoders:
+            metadata["feature_encoding"] = self.feature_encoding_info
+            metadata["feature_encoders"] = self.feature_encoders
+        
         logger.info(f"피처 형태: {X.shape}, 타겟 형태: {y.shape}")
         
         return X, y, feature_names, metadata
@@ -232,9 +289,13 @@ class DataLoader:
             feature_cols = [col for col in df.columns 
                           if col not in [target_column, time_column]]
         
+        # 범주형 피처 인코딩
+        df_features = df[feature_cols].copy()
+        df_features = self._encode_categorical_features(df_features)
+        
         # 시계열 시퀀스 생성
         X, y = self._create_sequences(
-            df[feature_cols].values,
+            df_features.values,
             df[target_column].values,
             lookback_window,
             forecast_horizon
@@ -243,7 +304,7 @@ class DataLoader:
         # 피처 이름 생성 (lag 정보 포함)
         feature_names = []
         for lag in range(lookback_window, 0, -1):
-            for col in feature_cols:
+            for col in df_features.columns:
                 feature_names.append(f"{col}_lag_{lag}")
         
         metadata = {
@@ -254,6 +315,11 @@ class DataLoader:
             "original_feature_names": feature_cols,
             "time_series_type": "univariate" if len(feature_cols) == 1 else "multivariate"
         }
+        
+        # 피처 인코딩 정보 추가
+        if self.feature_encoders:
+            metadata["feature_encoding"] = self.feature_encoding_info
+            metadata["feature_encoders"] = self.feature_encoders
         
         logger.info(f"시계열 시퀀스 생성 완료: X={X.shape}, y={y.shape}")
         
@@ -288,11 +354,14 @@ class DataLoader:
         
         # 피처 선택
         if feature_columns:
-            X = df[feature_columns]
+            X = df[feature_columns].copy()
         elif target_column and target_column in df.columns:
-            X = df.drop(columns=[target_column])
+            X = df.drop(columns=[target_column]).copy()
         else:
             X = df.copy()
+        
+        # 범주형 피처 인코딩
+        X = self._encode_categorical_features(X)
         
         # 타겟 (있는 경우)
         y = None
@@ -319,6 +388,11 @@ class DataLoader:
             "n_features": len(feature_names)
         }
         
+        # 피처 인코딩 정보 추가
+        if self.feature_encoders:
+            metadata["feature_encoding"] = self.feature_encoding_info
+            metadata["feature_encoders"] = self.feature_encoders
+        
         logger.info(f"피처 형태: {X.shape}, 타겟: {'있음' if y is not None else '없음'}")
         
         return X, y, feature_names, metadata
@@ -331,9 +405,12 @@ class DataLoader:
         
         # 피처 선택
         if feature_columns:
-            X = df[feature_columns]
+            X = df[feature_columns].copy()
         else:
             X = df.copy()
+        
+        # 범주형 피처 인코딩
+        X = self._encode_categorical_features(X)
         
         feature_names = X.columns.tolist()
         
@@ -342,6 +419,11 @@ class DataLoader:
             "n_clusters": n_clusters,
             "n_features": len(feature_names)
         }
+        
+        # 피처 인코딩 정보 추가
+        if self.feature_encoders:
+            metadata["feature_encoding"] = self.feature_encoding_info
+            metadata["feature_encoders"] = self.feature_encoders
         
         logger.info(f"클러스터링 데이터: {X.shape}, 목표 클러스터 수: {n_clusters}")
         
@@ -499,8 +581,6 @@ class DataLoader:
             "encoder": self.label_encoder
         }
 
-    # Add to DataLoader class
-
     def get_input_schema(self, X, feature_names: List[str]) -> Dict[str, Any]:
         """입력 데이터 스키마 생성"""
         import pandas as pd
@@ -509,6 +589,7 @@ class DataLoader:
         schema = {
             "n_features": len(feature_names),
             "feature_names": feature_names,
+            "description": f"Input schema for {self.task} task with {len(feature_names)} features",
             "features": []
         }
         
@@ -523,6 +604,15 @@ class DataLoader:
                 "null_count": int(df[col].isnull().sum())
             }
             
+            # 범주형 인코딩 정보 추가
+            if col in self.feature_encoding_info:
+                feature_info["encoding"] = {
+                    "type": "label_encoded",
+                    "original_type": "categorical",
+                    "description": f"Categorical feature '{col}' encoded to numeric",
+                    **self.feature_encoding_info[col]
+                }
+            
             # 수치형 데이터
             if pd.api.types.is_numeric_dtype(df[col]):
                 feature_info.update({
@@ -531,7 +621,8 @@ class DataLoader:
                     "max": float(df[col].max()),
                     "mean": float(df[col].mean()),
                     "std": float(df[col].std()),
-                    "median": float(df[col].median())
+                    "median": float(df[col].median()),
+                    "description": f"Numeric feature with range [{df[col].min():.2f}, {df[col].max():.2f}]"
                 })
             # 범주형 데이터
             elif pd.api.types.is_categorical_dtype(df[col]) or df[col].dtype == object:
@@ -539,7 +630,8 @@ class DataLoader:
                 feature_info.update({
                     "type": "categorical",
                     "n_unique": len(unique_vals),
-                    "categories": unique_vals.tolist()[:100]  # 처음 100개만
+                    "categories": unique_vals.tolist()[:100],  # 처음 100개만
+                    "description": f"Categorical feature with {len(unique_vals)} unique values"
                 })
             
             schema["features"].append(feature_info)
@@ -553,7 +645,8 @@ class DataLoader:
         
         schema = {
             "type": task,
-            "shape": y.shape if hasattr(y, 'shape') else (len(y),)
+            "shape": y.shape if hasattr(y, 'shape') else (len(y),),
+            "description": f"Output schema for {task} task"
         }
         
         if task == "classification":
@@ -563,7 +656,8 @@ class DataLoader:
                     "n_classes": len(label_encoding_info["original_classes"]),
                     "class_names": label_encoding_info["original_classes"],
                     "encoded": True,
-                    "label_mapping": label_encoding_info["label_mapping"]
+                    "label_mapping": label_encoding_info["label_mapping"],
+                    "description": f"Classification output with {len(label_encoding_info['original_classes'])} classes. Original labels: {label_encoding_info['original_classes']}"
                 })
             else:
                 # 원본 라벨
@@ -571,7 +665,8 @@ class DataLoader:
                 schema.update({
                     "n_classes": len(unique_classes),
                     "class_names": unique_classes,
-                    "encoded": False
+                    "encoded": False,
+                    "description": f"Classification output with {len(unique_classes)} classes: {unique_classes}"
                 })
         
         elif task == "regression":
@@ -580,13 +675,31 @@ class DataLoader:
                 "min": float(y_series.min()),
                 "max": float(y_series.max()),
                 "mean": float(y_series.mean()),
-                "std": float(y_series.std())
+                "std": float(y_series.std()),
+                "description": f"Regression output - continuous numeric values in range [{y_series.min():.2f}, {y_series.max():.2f}]"
+            })
+        
+        elif task == "timeseries":
+            y_series = pd.Series(y.flatten()) if hasattr(y, 'flatten') else pd.Series(y)
+            schema.update({
+                "min": float(y_series.min()),
+                "max": float(y_series.max()),
+                "mean": float(y_series.mean()),
+                "description": f"Time series forecast output - predicting future values with horizon={self.task_config.get('forecast_horizon', 1)}"
+            })
+        
+        elif task == "anomaly_detection":
+            schema.update({
+                "description": "Anomaly detection output - binary classification (0: normal, 1: anomaly)",
+                "contamination": self.task_config.get("contamination", 0.1)
             })
         
         elif task == "clustering":
             schema.update({
                 "n_samples": len(y) if y is not None else 0,
-                "unsupervised": y is None
+                "unsupervised": y is None,
+                "n_clusters": self.task_config.get("n_clusters", 3),
+                "description": f"Clustering output - assigns samples to {self.task_config.get('n_clusters', 3)} clusters"
             })
         
         return schema

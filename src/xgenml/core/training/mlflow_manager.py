@@ -64,19 +64,19 @@ class MLflowManager:
         mlflow.set_experiment(experiment_id=self.experiment_id)
     
     def log_model_training(
-        self,
-        run_name: str,
-        estimator,
-        params: Dict[str, Any],
-        metrics: Dict[str, Any],
-        X_train,
-        y_pred_test,
-        execution_id: str,
-        data_source_info: Dict[str, Any],
-        label_encoding_info: Optional[Dict[str, Any]] = None,
-        hpo_results: Optional[Dict[str, Any]] = None,
-        input_schema: Optional[Dict[str, Any]] = None,
-        output_schema: Optional[Dict[str, Any]] = None
+    self,
+    run_name: str,
+    estimator,
+    params: Dict[str, Any],
+    metrics: Dict[str, Any],
+    X_train,
+    y_pred_test,
+    execution_id: str,
+    data_source_info: Dict[str, Any],
+    label_encoding_info: Optional[Dict[str, Any]] = None,
+    hpo_results: Optional[Dict[str, Any]] = None,
+    input_schema: Optional[Dict[str, Any]] = None,
+    output_schema: Optional[Dict[str, Any]] = None
     ) -> tuple[str, bool]:
         """모델 학습 결과를 MLflow에 로깅"""
         import pandas as pd
@@ -87,13 +87,12 @@ class MLflowManager:
             logger.info(f"MLflow Run ID: {run_id}")
             logger.info(f"Artifact URI: {run_info.artifact_uri}")
             
-            # ✅ X_train을 명확하게 DataFrame으로 변환 (한 번만)
+            # X_train을 명확하게 DataFrame으로 변환
             if input_schema and input_schema.get('feature_names'):
                 if not isinstance(X_train, pd.DataFrame):
                     X_train = pd.DataFrame(X_train, columns=input_schema['feature_names'])
                     logger.info(f"✅ X_train을 DataFrame으로 변환 (features: {len(input_schema['feature_names'])})")
                 else:
-                    # 컬럼명 정렬 확인
                     if list(X_train.columns) != input_schema['feature_names']:
                         X_train = X_train[input_schema['feature_names']]
                         logger.info(f"✅ X_train 컬럼 순서 재정렬")
@@ -109,6 +108,10 @@ class MLflowManager:
             if label_encoding_info and label_encoding_info.get("used"):
                 self._log_label_encoding(run_id, label_encoding_info)
             
+            # ✅ 피처 인코딩 정보 로깅 추가
+            if label_encoding_info and label_encoding_info.get("feature_encoding"):
+                self._log_feature_encoding(run_id, label_encoding_info)
+            
             # HPO 정보 로깅
             if hpo_results:
                 self._log_hpo_results(hpo_results)
@@ -116,19 +119,18 @@ class MLflowManager:
             # 메트릭 로깅
             self._log_metrics(metrics)
             
-            # ✅ 모델 저장 (이미 DataFrame으로 변환된 X_train 전달)
+            # 모델 저장
             model_saved = self._save_model(
                 estimator=estimator,
-                X_train=X_train,  # 이미 DataFrame
+                X_train=X_train,
                 y_pred_test=y_pred_test,
                 input_schema=input_schema,
                 output_schema=output_schema
             )
             
-            # ✅ 모델 저장 검증
+            # 모델 저장 검증
             if model_saved:
                 logger.info("✅ 모델 아티팩트 저장 성공")
-                # MLmodel 파일 존재 확인
                 try:
                     self.client.download_artifacts(run_id, "model/MLmodel", "/tmp")
                     logger.info("✅ MLmodel 파일 확인됨")
@@ -137,6 +139,44 @@ class MLflowManager:
                     model_saved = False
             
             return run_id, model_saved
+
+    def _log_feature_encoding(self, run_id: str, label_info: Dict[str, Any]):
+        """피처 인코딩 정보 로깅"""
+        feature_encoding_info = label_info.get("feature_encoding", {})
+        feature_encoders = label_info.get("feature_encoders", {})
+        
+        if not feature_encoding_info:
+            return
+        
+        logger.info(f"📊 피처 인코딩 정보 로깅 중... ({len(feature_encoding_info)}개 컬럼)")
+        
+        # 인코딩 정보를 JSON으로 저장
+        encoding_summary = {}
+        for col, info in feature_encoding_info.items():
+            encoding_summary[col] = {
+                "n_unique": info["n_unique"],
+                "original_values_sample": info["original_values"][:5],
+                "encoded_values_sample": info["encoded_values"][:5]
+            }
+        
+        mlflow.log_param("feature_encoded_columns", json.dumps(list(feature_encoding_info.keys()), ensure_ascii=False))
+        mlflow.log_param("n_encoded_features", len(feature_encoding_info))
+        
+        # 상세 인코딩 정보를 아티팩트로 저장
+        encoding_path = f"/tmp/{run_id}_feature_encoding.json"
+        with open(encoding_path, "w", encoding="utf-8") as f:
+            json.dump(feature_encoding_info, f, ensure_ascii=False, indent=2)
+        mlflow.log_artifact(encoding_path, artifact_path="preprocessing")
+        os.unlink(encoding_path)
+        
+        # 각 피처의 인코더를 저장
+        for col, encoder in feature_encoders.items():
+            encoder_path = f"/tmp/{run_id}_feature_encoder_{col}.pkl"
+            joblib.dump(encoder, encoder_path)
+            mlflow.log_artifact(encoder_path, artifact_path="preprocessing/feature_encoders")
+            os.unlink(encoder_path)
+        
+        logger.info(f"✅ 피처 인코딩 정보 저장 완료: {len(feature_encoding_info)}개 컬럼")
 
     def _log_schemas(
     self, 
