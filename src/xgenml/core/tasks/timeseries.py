@@ -20,38 +20,56 @@ class TimeSeriesTask(BaseTask):
         return "timeseries"
     
     def prepare_data(
-        self,
-        df: pd.DataFrame,
-        target_column: str,
-        feature_columns: Optional[List[str]] = None,
-        time_column: Optional[str] = None,
-        lookback_window: int = 10,
-        forecast_horizon: int = 1,
-        **kwargs
+    self,
+    df: pd.DataFrame,
+    target_column: str,
+    feature_columns: Optional[List[str]] = None,
+    time_column: Optional[str] = None,
+    lookback_window: int = 30,
+    forecast_horizon: int = 1,
+    **kwargs
     ) -> Tuple[np.ndarray, np.ndarray, List[str], Dict[str, Any]]:
-        """
-        시계열 데이터 준비
-        
-        Args:
-            time_column: 시간 컬럼명
-            lookback_window: 과거 몇 개 시점을 볼지
-            forecast_horizon: 미래 몇 개 시점을 예측할지
-        """
+        """시계열 데이터 준비"""
         self.validate_data(df, target_column)
         
-        # 시간 컬럼 처리
+        # 🔥 수정 1: 시간 컬럼 처리 강화
         if time_column:
-            df = df.sort_values(time_column)
-            logger.info(f"시간 컬럼 '{time_column}'으로 정렬")
+            if time_column not in df.columns:
+                raise ValueError(f"time_column '{time_column}'이 데이터에 없습니다")
+            
+            # 날짜 타입 변환
+            if df[time_column].dtype == 'object':
+                try:
+                    df[time_column] = pd.to_datetime(df[time_column])
+                    logger.info(f"'{time_column}' 컬럼을 datetime으로 변환")
+                except Exception as e:
+                    logger.warning(f"날짜 변환 실패: {e}. 원본 데이터 사용")
+            
+            # 정렬 및 인덱스 리셋
+            df = df.sort_values(time_column).reset_index(drop=True)
+            logger.info(f"시간 컬럼 '{time_column}'으로 정렬 완료")
         
-        # 피처 선택
+        # 🔥 수정 2: 피처 선택 로직 명확화
         if feature_columns:
+            # 명시적으로 지정된 경우
             feature_cols = feature_columns
+            logger.info(f"명시적 피처 사용: {feature_cols}")
         else:
-            feature_cols = [col for col in df.columns 
-                          if col not in [target_column, time_column]]
+            # 자동 선택: target과 time_column 제외
+            exclude_cols = {target_column}
+            if time_column:
+                exclude_cols.add(time_column)
+            
+            feature_cols = [col for col in df.columns if col not in exclude_cols]
+            logger.info(f"자동 피처 선택: {feature_cols}")
+            logger.info(f"제외된 컬럼: {exclude_cols}")
         
-        # 시계열 윈도우 생성
+        # 🔥 추가: 피처 검증
+        missing_features = set(feature_cols) - set(df.columns)
+        if missing_features:
+            raise ValueError(f"데이터에 없는 피처: {missing_features}")
+        
+        # 시계열 시퀀스 생성
         X, y = self._create_sequences(
             df[feature_cols].values,
             df[target_column].values,
@@ -59,7 +77,7 @@ class TimeSeriesTask(BaseTask):
             forecast_horizon
         )
         
-        # 피처 이름 생성 (lag 정보 포함)
+        # 피처 이름 생성
         feature_names = []
         for lag in range(lookback_window, 0, -1):
             for col in feature_cols:
@@ -67,38 +85,47 @@ class TimeSeriesTask(BaseTask):
         
         metadata = {
             "label_encoded": False,
-            "time_column": time_column,
+            "time_column": time_column,  # 🔥 None이 아닌 실제 값 저장
             "lookback_window": lookback_window,
             "forecast_horizon": forecast_horizon,
             "original_feature_names": feature_cols,
             "time_series_type": "univariate" if len(feature_cols) == 1 else "multivariate"
         }
         
-        logger.info(f"시계열 시퀀스 생성 완료: {X.shape}")
-        logger.info(f"Lookback: {lookback_window}, Forecast: {forecast_horizon}")
+        logger.info(f"✅ 시계열 시퀀스 생성: X={X.shape}, y={y.shape}")
+        logger.info(f"   Lookback: {lookback_window}, Forecast: {forecast_horizon}")
+        logger.info(f"   피처 수: {len(feature_cols)}, 총 lag 피처: {len(feature_names)}")
         
         return X, y, feature_names, metadata
+
     
     def _create_sequences(
-        self,
-        features: np.ndarray,
-        target: np.ndarray,
-        lookback: int,
-        horizon: int
+    self,
+    features: np.ndarray,
+    target: np.ndarray,
+    lookback: int,
+    horizon: int
     ) -> Tuple[np.ndarray, np.ndarray]:
-        """시계열 시퀀스 생성"""
+        """시계열 시퀀스 생성 - 3D 형태 유지"""
         X, y = [], []
         
         for i in range(len(features) - lookback - horizon + 1):
-            # 과거 lookback 시점의 데이터
-            X.append(features[i:i+lookback].flatten())
-            # 미래 horizon 시점의 타겟
+            # 🔥 수정: flatten 제거 → 3D 유지
+            X.append(features[i:i+lookback])  # (lookback, n_features)
+            
             if horizon == 1:
                 y.append(target[i+lookback])
             else:
                 y.append(target[i+lookback:i+lookback+horizon])
         
-        return np.array(X), np.array(y)
+        X = np.array(X)  # (n_samples, lookback, n_features)
+        y = np.array(y)
+        
+        # 🔥 추가: sklearn 모델용으로는 2D 변환 필요
+        # 나중에 모델 타입에 따라 reshape 선택
+        X_2d = X.reshape(X.shape[0], -1)  # (n_samples, lookback*n_features)
+        
+    return X_2d, y  # 일단 2D 반환 (기존 코드 호환)
     
     def split_data(
         self,

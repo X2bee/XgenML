@@ -265,7 +265,7 @@ class DataLoader:
         return X, y, feature_names, metadata
     
     def _prepare_timeseries(
-        self, df: pd.DataFrame, target_column: str, feature_columns: Optional[List[str]]
+    self, df: pd.DataFrame, target_column: str, feature_columns: Optional[List[str]]
     ) -> Tuple[np.ndarray, np.ndarray, List[str], Dict[str, Any]]:
         """시계열 데이터 준비"""
         if not target_column or target_column not in df.columns:
@@ -277,23 +277,44 @@ class DataLoader:
         
         logger.info(f"시계열 설정: lookback={lookback_window}, horizon={forecast_horizon}")
         
-        # 시간 컬럼으로 정렬
+        # 🔥 수정 1: 시간 컬럼 처리 강화
         if time_column and time_column in df.columns:
-            df = df.sort_values(time_column)
+            # 날짜 타입 변환 시도
+            if df[time_column].dtype == 'object':
+                try:
+                    df = df.copy()  # 원본 보호
+                    df[time_column] = pd.to_datetime(df[time_column])
+                    logger.info(f"'{time_column}' 컬럼을 datetime으로 변환")
+                except Exception as e:
+                    logger.warning(f"날짜 변환 실패: {e}. 원본 사용")
+            
+            # 정렬 및 인덱스 리셋
+            df = df.sort_values(time_column).reset_index(drop=True)
             logger.info(f"시간 컬럼 '{time_column}'으로 정렬")
         
-        # 피처 선택
+        # 🔥 수정 2: 피처 선택 로직 명확화
         if feature_columns:
             feature_cols = feature_columns
+            logger.info(f"명시적 피처 사용: {feature_cols}")
         else:
-            feature_cols = [col for col in df.columns 
-                          if col not in [target_column, time_column]]
+            # 자동 선택: target과 time_column 제외
+            exclude_cols = [target_column]
+            if time_column and time_column in df.columns:
+                exclude_cols.append(time_column)
+            
+            feature_cols = [col for col in df.columns if col not in exclude_cols]
+            logger.info(f"자동 피처 선택: {feature_cols} (제외: {exclude_cols})")
         
-        # 범주형 피처 인코딩
+        # 🔥 추가 3: 피처 검증
+        missing_features = set(feature_cols) - set(df.columns)
+        if missing_features:
+            raise ValueError(f"데이터에 없는 피처: {missing_features}")
+        
+        # 범주형 피처 인코딩 (기존 코드 유지)
         df_features = df[feature_cols].copy()
         df_features = self._encode_categorical_features(df_features)
         
-        # 시계열 시퀀스 생성
+        # 시계열 시퀀스 생성 (기존 코드 유지)
         X, y = self._create_sequences(
             df_features.values,
             df[target_column].values,
@@ -301,30 +322,36 @@ class DataLoader:
             forecast_horizon
         )
         
-        # 피처 이름 생성 (lag 정보 포함)
+        # 피처 이름 생성 (기존 코드 유지)
         feature_names = []
         for lag in range(lookback_window, 0, -1):
             for col in df_features.columns:
                 feature_names.append(f"{col}_lag_{lag}")
         
+        # 🔥 수정 4: 메타데이터에 time_column 정보 명확히 저장
         metadata = {
             "label_encoded": False,
-            "time_column": time_column,
+            "time_column": time_column if time_column and time_column in df.columns else None,
             "lookback_window": lookback_window,
             "forecast_horizon": forecast_horizon,
-            "original_feature_names": feature_cols,
+            "original_feature_names": feature_cols,  # ← 실제 사용된 피처명
             "time_series_type": "univariate" if len(feature_cols) == 1 else "multivariate"
         }
         
-        # 피처 인코딩 정보 추가
+        # 피처 인코딩 정보 추가 (기존 코드 유지)
         if self.feature_encoders:
             metadata["feature_encoding"] = self.feature_encoding_info
             metadata["feature_encoders"] = self.feature_encoders
         
-        logger.info(f"시계열 시퀀스 생성 완료: X={X.shape}, y={y.shape}")
+        # 🔥 추가 5: 상세 로깅
+        logger.info(f"✅ 시계열 시퀀스 생성: X={X.shape}, y={y.shape}")
+        logger.info(f"   사용 피처: {feature_cols} ({len(feature_cols)}개)")
+        logger.info(f"   제외 컬럼: target='{target_column}'" + 
+                    (f", time='{time_column}'" if time_column else ""))
+        logger.info(f"   총 lag 피처: {len(feature_names)}개 ({lookback_window} × {len(feature_cols)})")
         
         return X, y, feature_names, metadata
-    
+        
     def _create_sequences(
         self,
         features: np.ndarray,
