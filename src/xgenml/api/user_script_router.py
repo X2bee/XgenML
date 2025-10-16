@@ -110,6 +110,74 @@ async def execute_user_script(request: ScriptExecuteRequest):
         # 실행 설정 준비
         run_config = request.run_config.model_dump()
 
+        # 데이터셋 URI가 있으면 데이터 로드 및 분할
+        if run_config.get('dataset_uri'):
+            import pandas as pd
+            import tempfile
+            from pathlib import Path
+            from sklearn.model_selection import train_test_split
+
+            # 데이터 로드
+            dataset_uri = run_config['dataset_uri']
+            df = pd.read_csv(dataset_uri) if dataset_uri.endswith('.csv') else pd.read_parquet(dataset_uri)
+
+            # 특성과 타겟 분리
+            target_column = run_config.get('target_column')
+            feature_columns = run_config.get('feature_columns', [])
+
+            if not target_column or target_column not in df.columns:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail={
+                        "error": {
+                            "message": "타겟 컬럼이 유효하지 않습니다.",
+                            "detail": f"target_column: {target_column}",
+                            "code": "INVALID_TARGET_COLUMN"
+                        }
+                    }
+                )
+
+            # feature_columns가 비어있으면 target을 제외한 모든 컬럼 사용
+            if not feature_columns:
+                feature_columns = [col for col in df.columns if col != target_column]
+
+            X = df[feature_columns]
+            y = df[target_column]
+
+            # 데이터 분할 (train 70%, val 15%, test 15%)
+            random_seed = run_config.get('random_seed', 42)
+            X_train, X_temp, y_train, y_temp = train_test_split(X, y, test_size=0.3, random_state=random_seed)
+            X_val, X_test, y_val, y_test = train_test_split(X_temp, y_temp, test_size=0.5, random_state=random_seed)
+
+            # 임시 디렉토리에 데이터 저장
+            temp_dir = Path(tempfile.mkdtemp(prefix="xgenml_execute_"))
+
+            X_train_path = temp_dir / "X_train.parquet"
+            y_train_path = temp_dir / "y_train.parquet"
+            X_val_path = temp_dir / "X_val.parquet"
+            y_val_path = temp_dir / "y_val.parquet"
+            X_test_path = temp_dir / "X_test.parquet"
+            y_test_path = temp_dir / "y_test.parquet"
+
+            X_train.to_parquet(X_train_path)
+            pd.Series(y_train).to_frame().to_parquet(y_train_path)
+            X_val.to_parquet(X_val_path)
+            pd.Series(y_val).to_frame().to_parquet(y_val_path)
+            X_test.to_parquet(X_test_path)
+            pd.Series(y_test).to_frame().to_parquet(y_test_path)
+
+            # run_config에 데이터 경로 추가
+            run_config['X_train_path'] = str(X_train_path)
+            run_config['y_train_path'] = str(y_train_path)
+            run_config['X_val_path'] = str(X_val_path)
+            run_config['y_val_path'] = str(y_val_path)
+            run_config['X_test_path'] = str(X_test_path)
+            run_config['y_test_path'] = str(y_test_path)
+
+            # params가 없으면 빈 딕셔너리 추가
+            if 'params' not in run_config:
+                run_config['params'] = {}
+
         # 스크립트 실행
         result = execute_script(
             script_content=request.content,

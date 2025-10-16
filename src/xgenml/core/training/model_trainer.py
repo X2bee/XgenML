@@ -70,36 +70,53 @@ class ModelTrainer:
                 # User Script Execution
                 logger.info("사용자 스크립트 실행...")
                 script_executor = ScriptExecutor()
-                with tempfile.TemporaryDirectory() as temp_dir:
-                    temp_path = Path(temp_dir)
-                    artifact_dir = temp_path / "artifacts"
-                    artifact_dir.mkdir(parents=True, exist_ok=True)
 
-                    X_train_path = temp_path / "X_train.parquet"
-                    y_train_path = temp_path / "y_train.parquet"
-                    X_val_path = temp_path / "X_val.parquet"
-                    y_val_path = temp_path / "y_val.parquet"
-                    X_test_path = temp_path / "X_test.parquet"
-                    y_test_path = temp_path / "y_test.parquet"
+                # 영구 artifact 디렉토리 생성 (MLflow 로깅 후 정리)
+                import shutil
+                persistent_artifact_dir = Path(tempfile.mkdtemp(prefix="userscript_artifacts_"))
 
-                    X_train.to_parquet(X_train_path)
-                    pd.Series(y_train).to_frame().to_parquet(y_train_path)
-                    X_val.to_parquet(X_val_path)
-                    pd.Series(y_val).to_frame().to_parquet(y_val_path)
-                    X_test.to_parquet(X_test_path)
-                    pd.Series(y_test).to_frame().to_parquet(y_test_path)
+                try:
+                    with tempfile.TemporaryDirectory() as temp_dir:
+                        temp_path = Path(temp_dir)
+                        temp_artifact_dir = temp_path / "artifacts"
+                        temp_artifact_dir.mkdir(parents=True, exist_ok=True)
 
-                    run_config = {
-                        "X_train_path": str(X_train_path),
-                        "y_train_path": str(y_train_path),
-                        "X_val_path": str(X_val_path),
-                        "y_val_path": str(y_val_path),
-                        "X_test_path": str(X_test_path),
-                        "y_test_path": str(y_test_path),
-                        "artifact_dir": str(artifact_dir),
-                        "params": model_params
-                    }
-                    execution_result = script_executor.execute(estimator.model_info['content'], run_config)
+                        X_train_path = temp_path / "X_train.parquet"
+                        y_train_path = temp_path / "y_train.parquet"
+                        X_val_path = temp_path / "X_val.parquet"
+                        y_val_path = temp_path / "y_val.parquet"
+                        X_test_path = temp_path / "X_test.parquet"
+                        y_test_path = temp_path / "y_test.parquet"
+
+                        X_train.to_parquet(X_train_path)
+                        pd.Series(y_train).to_frame().to_parquet(y_train_path)
+                        X_val.to_parquet(X_val_path)
+                        pd.Series(y_val).to_frame().to_parquet(y_val_path)
+                        X_test.to_parquet(X_test_path)
+                        pd.Series(y_test).to_frame().to_parquet(y_test_path)
+
+                        run_config = {
+                            "X_train_path": str(X_train_path),
+                            "y_train_path": str(y_train_path),
+                            "X_val_path": str(X_val_path),
+                            "y_val_path": str(y_val_path),
+                            "X_test_path": str(X_test_path),
+                            "y_test_path": str(y_test_path),
+                            "artifact_dir": str(temp_artifact_dir),
+                            "params": model_params
+                        }
+                        execution_result = script_executor.execute(estimator.model_info['content'], run_config)
+
+                        # 아티팩트를 영구 디렉토리로 복사 (MLflow 로깅 전)
+                        if temp_artifact_dir.exists():
+                            for item in temp_artifact_dir.iterdir():
+                                if item.is_file():
+                                    shutil.copy2(item, persistent_artifact_dir / item.name)
+                                    logger.info(f"📁 아티팩트 복사: {item.name}")
+                except Exception:
+                    # 실행 실패 시 영구 디렉토리 정리
+                    shutil.rmtree(persistent_artifact_dir, ignore_errors=True)
+                    raise
 
                 # 실행 결과 확인
                 logger.info(f"UserScript 실행 결과 키: {execution_result.keys()}")
@@ -162,8 +179,21 @@ class ModelTrainer:
                 logger.info(f"✅ UserScript 실행 완료 - 메트릭: {raw_metrics}")
                 logger.info(f"✅ UserScript 아티팩트: {len(artifacts)}개")
 
+                # 아티팩트 경로를 영구 디렉토리로 업데이트
+                updated_artifacts = []
+                for artifact in artifacts:
+                    artifact_name = Path(artifact['path']).name
+                    new_path = persistent_artifact_dir / artifact_name
+                    if new_path.exists():
+                        updated_artifact = artifact.copy()
+                        updated_artifact['path'] = str(new_path)
+                        updated_artifacts.append(updated_artifact)
+                        logger.info(f"✓ 아티팩트 경로 업데이트: {artifact_name}")
+                    else:
+                        logger.warning(f"⚠️ 아티팩트 파일 없음: {new_path}")
+
                 estimator_for_log = None  # No estimator object for user scripts
-                user_script_artifacts = artifacts  # 아티팩트 저장
+                user_script_artifacts = updated_artifacts  # 업데이트된 아티팩트 경로
             else:
                 # 모델 학습
                 logger.info("모델 학습 시작...")
@@ -179,6 +209,7 @@ class ModelTrainer:
                 )
                 estimator_for_log = estimator
                 user_script_artifacts = []  # 일반 모델은 아티팩트 없음
+                persistent_artifact_dir = None  # UserScript가 아니면 None
 
             # MLflow 로깅
             run_name = self._generate_run_name(model_name, execution_id)
@@ -222,11 +253,24 @@ class ModelTrainer:
             
             model_duration = time.time() - model_start_time
             logger.info(f"✅ {model_name} 모델 완료 ({model_duration:.2f}초)")
-            
+
+            # UserScript 아티팩트 디렉토리 정리 (MLflow 로깅 완료 후)
+            if isinstance(estimator, UserScriptModel) and persistent_artifact_dir and persistent_artifact_dir.exists():
+                import shutil
+                try:
+                    shutil.rmtree(persistent_artifact_dir)
+                    logger.info(f"🗑️ 임시 아티팩트 디렉토리 정리 완료: {persistent_artifact_dir}")
+                except Exception as cleanup_error:
+                    logger.warning(f"⚠️ 아티팩트 디렉토리 정리 실패: {cleanup_error}")
+
             return summary
-            
+
         except Exception as e:
             logger.error(f"❌ {model_name} 모델 학습 실패: {str(e)}")
+            # UserScript 실패 시에도 정리
+            if 'persistent_artifact_dir' in locals() and persistent_artifact_dir and persistent_artifact_dir.exists():
+                import shutil
+                shutil.rmtree(persistent_artifact_dir, ignore_errors=True)
             raise
     
     def _prepare_model_params(
