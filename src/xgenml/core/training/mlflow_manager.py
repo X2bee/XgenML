@@ -76,7 +76,8 @@ class MLflowManager:
     label_encoding_info: Optional[Dict[str, Any]] = None,
     hpo_results: Optional[Dict[str, Any]] = None,
     input_schema: Optional[Dict[str, Any]] = None,
-    output_schema: Optional[Dict[str, Any]] = None
+    output_schema: Optional[Dict[str, Any]] = None,
+    user_script_artifacts: Optional[List[Dict[str, Any]]] = None
     ) -> tuple[str, bool]:
         """모델 학습 결과를 MLflow에 로깅"""
         import pandas as pd
@@ -118,7 +119,11 @@ class MLflowManager:
             
             # 메트릭 로깅
             self._log_metrics(metrics)
-            
+
+            # UserScript 아티팩트 로깅
+            if user_script_artifacts:
+                self._log_user_script_artifacts(run_id, user_script_artifacts)
+
             # 모델 저장
             model_saved = self._save_model(
                 estimator=estimator,
@@ -245,14 +250,40 @@ class MLflowManager:
         """메트릭 로깅"""
         logger.info("메트릭 로깅 중...")
         metric_count = 0
-        
+
         for mtype, d in metrics.items():
             for k, v in d.items():
                 if isinstance(v, (int, float)):
                     mlflow.log_metric(f"{mtype}_{k}", float(v))
                     metric_count += 1
-        
+
         logger.info(f"메트릭 로깅 완료 ({metric_count}개)")
+
+    def _log_user_script_artifacts(self, run_id: str, artifacts: List[Dict[str, Any]]):
+        """UserScript 아티팩트 로깅"""
+        if not artifacts:
+            return
+
+        logger.info(f"📦 UserScript 아티팩트 로깅 중... ({len(artifacts)}개)")
+
+        for artifact in artifacts:
+            artifact_path = artifact.get("path")
+            artifact_name = artifact.get("name", "unnamed")
+            artifact_type = artifact.get("type", "unknown")
+
+            if not artifact_path or not os.path.exists(artifact_path):
+                logger.warning(f"⚠️ 아티팩트 파일 없음: {artifact_path}")
+                continue
+
+            try:
+                # 아티팩트 타입별로 디렉토리 구분
+                artifact_dir = f"user_script_artifacts/{artifact_type}"
+                mlflow.log_artifact(artifact_path, artifact_path=artifact_dir)
+                logger.info(f"  ✓ {artifact_name} ({artifact_type}): {artifact_path}")
+            except Exception as e:
+                logger.error(f"  ✗ 아티팩트 로깅 실패 ({artifact_name}): {e}")
+
+        logger.info(f"✅ UserScript 아티팩트 로깅 완료")
     
     def _save_model(self, estimator, X_train, y_pred_test, input_schema=None, output_schema=None):
         """모델 저장 - 로컬 저장 후 MLflow 서버를 통해 업로드"""
@@ -273,13 +304,20 @@ class MLflowManager:
         if not active_run:
             logger.error("Active run 없음")
             return False
-        
+
         run_id = active_run.info.run_id
-        
+
+        # UserScript 모델인 경우 (estimator=None) 저장 스킵
+        # 아티팩트는 이미 _log_user_script_artifacts에서 저장됨
+        if estimator is None:
+            logger.info("⚠️ UserScript 모델 - sklearn 모델 저장 스킵 (아티팩트는 별도 저장됨)")
+            logger.info("============================================================")
+            return True  # UserScript는 아티팩트가 저장되었으므로 True 반환
+
         try:
             # Input/Output example
             input_example = X_train.iloc[:min(5, len(X_train))].copy()
-            
+
             if hasattr(estimator, 'predict_proba') and output_schema and output_schema.get('type') == 'classification':
                 output_example = estimator.predict_proba(input_example)
                 logger.info(f"predict_proba 사용 (shape: {output_example.shape})")

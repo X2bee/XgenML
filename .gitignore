@@ -12,5 +12,6 @@ mlruns/
 dist/
 build/
 .DS_Store
+data/
 
 docs/

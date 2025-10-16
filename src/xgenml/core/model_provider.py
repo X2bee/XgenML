@@ -12,6 +12,9 @@ from ..utils.logger_config import setup_logger
 
 logger = setup_logger(__name__)
 
+class UserScriptModel:
+    def __init__(self, model_info):
+        self.model_info = model_info
 
 def create_estimator(task: str, name: str, override: Dict[str, Any] | None = None):
     """
@@ -30,7 +33,7 @@ def create_estimator(task: str, name: str, override: Dict[str, Any] | None = Non
         ImportError: 필요한 패키지 미설치
     """
     # 카탈로그에서 모델 스펙 찾기
-    spec = next((m for m in CATALOG.get(task, []) if m["name"] == name), None)
+    spec = get_model_info(task, name)
     if spec is None:
         available_tasks = list(CATALOG.keys())
         available_models = [m["name"] for m in CATALOG.get(task, [])]
@@ -39,7 +42,10 @@ def create_estimator(task: str, name: str, override: Dict[str, Any] | None = Non
             f"사용 가능한 태스크: {available_tasks}\n"
             f"'{task}' 태스크의 사용 가능한 모델: {available_models}"
         )
-    
+
+    if spec.get("is_user_script"):
+        return UserScriptModel(spec)
+
     # 필요한 패키지 확인
     req_check = check_model_requirements(task, name)
     if not req_check["available"]:

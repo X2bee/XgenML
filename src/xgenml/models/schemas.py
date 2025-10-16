@@ -21,7 +21,7 @@ class TrainRequest(BaseModel):
     use_mlflow_dataset: bool = False
     mlflow_run_id: Optional[str] = None
     mlflow_experiment_name: Optional[str] = None
-    mlflow_artifact_path: str = "dataset"
+    mlflow_artifact_path: Optional[str] = "dataset"
     
     target_column: str
     feature_columns: Optional[List[str]] = None

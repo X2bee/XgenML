@@ -19,7 +19,7 @@ class TrainingService:
         use_mlflow_dataset: bool = False,
         mlflow_run_id: Optional[str] = None,
         mlflow_experiment_name: Optional[str] = None,
-        mlflow_artifact_path: str = "dataset",
+        mlflow_artifact_path: Optional[str] = "dataset",
         # 나머지
         target_column: str = None,
         feature_columns: Optional[List[str]] = None,
@@ -32,6 +32,8 @@ class TrainingService:
         hpo_config: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         
+        final_artifact_path = mlflow_artifact_path if mlflow_artifact_path is not None else "dataset"
+
         return train_from_hf(
             model_id=model_id,
             task=task,
@@ -42,7 +44,7 @@ class TrainingService:
             # MLflow
             use_mlflow_dataset=use_mlflow_dataset,
             mlflow_run_id=mlflow_run_id,
-            mlflow_artifact_path=mlflow_artifact_path,
+            mlflow_artifact_path=final_artifact_path,
             # 나머지
             target_column=target_column,
             feature_columns=feature_columns,

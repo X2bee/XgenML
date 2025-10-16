@@ -16,6 +16,7 @@ from .training_router import router as training_router
 from .serving_router import router as serving_router
 from .cache_router import router as cache_router
 from .model_catalog_router import router as catalog_router
+from .user_script_router import router as user_script_router
 
 def create_app() -> FastAPI:
     """FastAPI 앱 팩토리 함수"""
@@ -47,6 +48,7 @@ def create_app() -> FastAPI:
     app.include_router(serving_router, prefix="/api")       # /api/predict/*
     app.include_router(cache_router, prefix="/api")         # /api/cache/*
     app.include_router(catalog_router, prefix="/api")       # /api/models/*
+    app.include_router(user_script_router, prefix="/api")   # /api/scripts/*
 
     # 헬스체크 엔드포인트
     @app.get("/")
@@ -57,9 +59,10 @@ def create_app() -> FastAPI:
             "docs": "/docs",
             "endpoints": {
                 "training": "/api/training",
-                "prediction": "/api/predict", 
+                "prediction": "/api/predict",
                 "cache": "/api/cache",
-                "catalog": "/api/models"
+                "catalog": "/api/models",
+                "user_scripts": "/api/scripts"
             }
         }
 

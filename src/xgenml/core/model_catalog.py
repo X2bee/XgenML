@@ -1,4 +1,5 @@
 # /src/xgenml/core/model_catalog.py
+from src.xgenml.services.script_registry import get_script_registry
 
 CATALOG = {
     # ========================================
@@ -249,11 +250,31 @@ def get_models_by_task(task: str):
 
 def get_model_info(task: str, model_name: str):
     """특정 모델의 상세 정보 반환"""
+    # Check built-in models
     models = get_models_by_task(task)
     for model in models:
         if model["name"] == model_name:
             return model
+
+    # Check user script models
+    if "@" in model_name:
+        parts = model_name.split("@")
+        if len(parts) == 2:
+            name, version = parts
+            registry = get_script_registry()
+            script_info = registry.get_script(name, version)
+            if script_info and script_info.get("task") == task:
+                return {
+                    "name": model_name,
+                    "is_user_script": True,
+                    "task": script_info.get("task"),
+                    "requires": script_info.get("metadata", {}).get("requires", []),
+                    "script_path": script_info.get("absolute_path"),
+                    "content": registry.get_script_content(name, version)
+                }
+
     return None
+
 
 
 def get_models_by_tag(tag: str):
@@ -270,7 +291,19 @@ def get_models_by_tag(tag: str):
 
 def validate_model_name(task: str, model_name: str) -> bool:
     """모델 이름이 유효한지 확인"""
-    return any(m["name"] == model_name for m in get_models_by_task(task))
+    # Check built-in models first
+    if any(m["name"] == model_name for m in get_models_by_task(task)):
+        return True
+
+    # Check for user script models (e.g., "my_model@1.0.0")
+    if "@" in model_name:
+        parts = model_name.split("@")
+        if len(parts) == 2:
+            name, version = parts
+            registry = get_script_registry()
+            return registry.script_exists(name, version)
+
+    return False
 
 
 def get_available_tasks():

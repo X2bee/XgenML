@@ -71,6 +71,10 @@ class UserScriptResult(BaseModel):
     warnings: List[str]
     errors: List[str]
     artifacts: List[Artifact]
+    model: Optional[Any] = None  # 훈련된 모델 객체 (선택사항)
+
+    class Config:
+        arbitrary_types_allowed = True  # 모델 객체 허용
 
 
 # ========================

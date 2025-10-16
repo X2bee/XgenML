@@ -117,6 +117,7 @@ class ScriptExecutor:
 import sys
 import json
 import traceback
+import pandas as pd
 from datetime import datetime
 from pathlib import Path
 
@@ -129,6 +130,15 @@ try:
     # run_config 로딩
     with open(str(Path("{work_dir}") / "config.json"), 'r', encoding='utf-8') as f:
         run_config_dict = json.load(f)
+
+    # 데이터 로딩
+    if 'X_train_path' in run_config_dict:
+        run_config_dict['X_train'] = pd.read_parquet(run_config_dict['X_train_path'])
+        run_config_dict['y_train'] = pd.read_parquet(run_config_dict['y_train_path']).iloc[:, 0]
+        run_config_dict['X_val'] = pd.read_parquet(run_config_dict['X_val_path'])
+        run_config_dict['y_val'] = pd.read_parquet(run_config_dict['y_val_path']).iloc[:, 0]
+        run_config_dict['X_test'] = pd.read_parquet(run_config_dict['X_test_path'])
+        run_config_dict['y_test'] = pd.read_parquet(run_config_dict['y_test_path']).iloc[:, 0]
 
     # UserScriptRunConfig 객체 생성 (간단한 namespace)
     from types import SimpleNamespace
@@ -143,22 +153,45 @@ try:
     finished_at = datetime.utcnow().isoformat() + 'Z'
     print(f"[INFO] Training finished at {{finished_at}}")
 
+    # 모델 저장 (있는 경우)
+    model_artifact = None
+    if hasattr(result, 'model') and result.model is not None:
+        import joblib
+        model_path = Path("{work_dir}") / "artifacts" / "model.pkl"
+        model_path.parent.mkdir(parents=True, exist_ok=True)
+        joblib.dump(result.model, model_path)
+
+        model_artifact = {{
+            "name": "trained_model",
+            "path": str(model_path),
+            "size_bytes": model_path.stat().st_size,
+            "type": "model",
+            "created_at": datetime.utcnow().isoformat() + 'Z'
+        }}
+        print(f"[INFO] Model saved to {{model_path}}")
+
     # 결과 출력 (JSON)
+    artifacts_list = [
+        {{
+            "name": a.name,
+            "path": a.path,
+            "size_bytes": a.size_bytes,
+            "type": a.type,
+            "created_at": a.created_at.isoformat() + 'Z' if hasattr(a, 'created_at') else datetime.utcnow().isoformat() + 'Z'
+        }}
+        for a in (result.artifacts if hasattr(result, 'artifacts') else [])
+    ]
+
+    # 모델 아티팩트 추가
+    if model_artifact:
+        artifacts_list.append(model_artifact)
+
     output = {{
         "result": {{
             "metrics": result.metrics if hasattr(result, 'metrics') else {{}},
             "warnings": result.warnings if hasattr(result, 'warnings') else [],
             "errors": result.errors if hasattr(result, 'errors') else [],
-            "artifacts": [
-                {{
-                    "name": a.name,
-                    "path": a.path,
-                    "size_bytes": a.size_bytes,
-                    "type": a.type,
-                    "created_at": a.created_at.isoformat() + 'Z' if hasattr(a, 'created_at') else datetime.utcnow().isoformat() + 'Z'
-                }}
-                for a in (result.artifacts if hasattr(result, 'artifacts') else [])
-            ]
+            "artifacts": artifacts_list
         }},
         "started_at": started_at,
         "finished_at": finished_at

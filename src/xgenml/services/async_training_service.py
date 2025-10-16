@@ -27,7 +27,7 @@ class AsyncTrainingService:
         use_mlflow_dataset: bool = False,
         mlflow_run_id: Optional[str] = None,
         mlflow_experiment_name: Optional[str] = None,
-        mlflow_artifact_path: str = "dataset",
+        mlflow_artifact_path: Optional[str] = "dataset",
         # 나머지 파라미터
         target_column: str = None,
         feature_columns: Optional[List[str]] = None,

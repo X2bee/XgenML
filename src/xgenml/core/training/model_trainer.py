@@ -1,12 +1,16 @@
 # /src/xgenml/core/training/model_trainer.py
 import time
+import tempfile
+import pandas as pd
+from pathlib import Path
 from typing import Dict, Any, Optional, Tuple
 
-from src.xgenml.core.model_provider import create_estimator
+from src.xgenml.core.model_provider import create_estimator, UserScriptModel
 from src.xgenml.services.hyperparameter_optimization import HyperparameterOptimizer
 from src.xgenml.core.training.evaluator import ModelEvaluator
 from src.xgenml.core.training.mlflow_manager import MLflowManager
 from src.xgenml.utils.logger_config import setup_logger
+from src.xgenml.services.script_executor import ScriptExecutor
 
 logger = setup_logger(__name__)
 
@@ -61,43 +65,129 @@ class ModelTrainer:
             logger.info("모델 생성 중...")
             estimator = create_estimator(self.task, model_name, model_params)
             logger.info(f"모델 생성 완료: {type(estimator).__name__}")
-            
-            # 모델 학습
-            logger.info("모델 학습 시작...")
-            fit_start_time = time.time()
-            estimator.fit(X_train, y_train)
-            fit_duration = time.time() - fit_start_time
-            logger.info(f"✅ 모델 학습 완료 ({fit_duration:.2f}초)")
-            
-            # 모델 평가
-            metrics = self.evaluator.evaluate(
-                estimator, X_train, y_train, X_val, y_val, X_test, y_test,
-                use_cv, cv_folds
-            )
-            
+
+            if isinstance(estimator, UserScriptModel):
+                # User Script Execution
+                logger.info("사용자 스크립트 실행...")
+                script_executor = ScriptExecutor()
+                with tempfile.TemporaryDirectory() as temp_dir:
+                    temp_path = Path(temp_dir)
+                    artifact_dir = temp_path / "artifacts"
+                    artifact_dir.mkdir(parents=True, exist_ok=True)
+
+                    X_train_path = temp_path / "X_train.parquet"
+                    y_train_path = temp_path / "y_train.parquet"
+                    X_val_path = temp_path / "X_val.parquet"
+                    y_val_path = temp_path / "y_val.parquet"
+                    X_test_path = temp_path / "X_test.parquet"
+                    y_test_path = temp_path / "y_test.parquet"
+
+                    X_train.to_parquet(X_train_path)
+                    pd.Series(y_train).to_frame().to_parquet(y_train_path)
+                    X_val.to_parquet(X_val_path)
+                    pd.Series(y_val).to_frame().to_parquet(y_val_path)
+                    X_test.to_parquet(X_test_path)
+                    pd.Series(y_test).to_frame().to_parquet(y_test_path)
+
+                    run_config = {
+                        "X_train_path": str(X_train_path),
+                        "y_train_path": str(y_train_path),
+                        "X_val_path": str(X_val_path),
+                        "y_val_path": str(y_val_path),
+                        "X_test_path": str(X_test_path),
+                        "y_test_path": str(y_test_path),
+                        "artifact_dir": str(artifact_dir),
+                        "params": model_params
+                    }
+                    execution_result = script_executor.execute(estimator.model_info['content'], run_config)
+
+                # 실행 결과 확인
+                logger.info(f"UserScript 실행 결과: {execution_result.keys()}")
+
+                result_data = execution_result.get("result") or {}
+                raw_metrics = result_data.get("metrics", {})
+                artifacts = result_data.get("artifacts", [])
+
+                # stdout/stderr 로깅
+                stdout = execution_result.get("stdout", [])
+                stderr = execution_result.get("stderr", [])
+                exit_code = execution_result.get("exit_code", -1)
+
+                if stdout:
+                    logger.info("UserScript stdout:")
+                    for line in stdout:
+                        logger.info(f"  {line}")
+
+                if stderr:
+                    logger.warning("UserScript stderr:")
+                    for line in stderr:
+                        logger.warning(f"  {line}")
+
+                logger.info(f"UserScript exit code: {exit_code}")
+
+                # 에러가 있으면 예외 발생
+                if exit_code != 0:
+                    error_msg = "\n".join(stderr) if stderr else "Unknown error"
+                    raise RuntimeError(f"UserScript 실행 실패 (exit_code={exit_code}): {error_msg}")
+
+                if not raw_metrics:
+                    logger.error("UserScript가 메트릭을 반환하지 않았습니다!")
+                    logger.error(f"result_data: {result_data}")
+                    raise RuntimeError("UserScript가 비어있는 메트릭을 반환했습니다")
+
+                # UserScript 메트릭을 표준 구조로 변환 (train/val/test)
+                # UserScript가 직접 반환한 메트릭은 test 메트릭으로 간주
+                metrics = {
+                    "train": {},
+                    "val": {},
+                    "test": raw_metrics  # UserScript 메트릭을 test로 사용
+                }
+
+                logger.info(f"✅ UserScript 실행 완료 - 메트릭: {raw_metrics}")
+                logger.info(f"✅ UserScript 아티팩트: {len(artifacts)}개")
+
+                estimator_for_log = None  # No estimator object for user scripts
+                user_script_artifacts = artifacts  # 아티팩트 저장
+            else:
+                # 모델 학습
+                logger.info("모델 학습 시작...")
+                fit_start_time = time.time()
+                estimator.fit(X_train, y_train)
+                fit_duration = time.time() - fit_start_time
+                logger.info(f"✅ 모델 학습 완료 ({fit_duration:.2f}초)")
+
+                # 모델 평가
+                metrics = self.evaluator.evaluate(
+                    estimator, X_train, y_train, X_val, y_val, X_test, y_test,
+                    use_cv, cv_folds
+                )
+                estimator_for_log = estimator
+                user_script_artifacts = []  # 일반 모델은 아티팩트 없음
+
             # MLflow 로깅
             run_name = self._generate_run_name(model_name, execution_id)
-            
+
             params_to_log = {
                 "algorithm": model_name,
                 "use_cv": use_cv,
                 "cv_folds": cv_folds,
             }
             params_to_log.update(model_params)
-            
+
             run_id, model_saved = self.mlflow_manager.log_model_training(
                     run_name=run_name,
-                    estimator=estimator,
+                    estimator=estimator_for_log,
                     params=params_to_log,
                     metrics=metrics,
                     X_train=X_train,
-                    y_pred_test=estimator.predict(X_test),
+                    y_pred_test=estimator.predict(X_test) if not isinstance(estimator, UserScriptModel) else None,
                     execution_id=execution_id,
                     data_source_info=data_source_info,
                     label_encoding_info=label_encoding_info,
                     hpo_results=hpo_results,
                     input_schema=input_schema,  # NEW
-                    output_schema=output_schema  # NEW
+                    output_schema=output_schema,  # NEW
+                    user_script_artifacts=user_script_artifacts if isinstance(estimator, UserScriptModel) else None
                 )
             
             # 결과 요약

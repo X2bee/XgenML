@@ -31,7 +31,7 @@ def train_from_hf(
     hf_revision: Optional[str] = None,
     use_mlflow_dataset: bool = False,
     mlflow_run_id: Optional[str] = None,
-    mlflow_artifact_path: str = "dataset",
+    mlflow_artifact_path: Optional[str] = "dataset",
     target_column: Optional[str] = None,
     feature_columns: Optional[List[str]] = None,
     model_names: Optional[List[str]] = None,
@@ -121,6 +121,8 @@ def train_from_hf(
         logger.info(f"  - Random State: {random_state}")
         logger.info(f"  - Use Unique Paths: {USE_UNIQUE_PATHS}")
         
+        final_mlflow_artifact_path = mlflow_artifact_path if mlflow_artifact_path is not None else "dataset"
+
         if task_config:
             logger.info(f"  - Task Config: {task_config}")
         if overrides:
@@ -247,7 +249,13 @@ def train_from_hf(
                 )
                 
                 results.append(summary)
-                
+
+                # 메트릭이 존재하는지 확인
+                if best_key not in summary["metrics"]["test"]:
+                    logger.error(f"{name} 모델의 '{best_key}' 메트릭이 없습니다.")
+                    logger.error(f"사용 가능한 메트릭: {list(summary['metrics']['test'].keys())}")
+                    continue
+
                 score = summary["metrics"]["test"][best_key]
                 if score > best_score:
                     best_score = score

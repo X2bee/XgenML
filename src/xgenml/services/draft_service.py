@@ -4,6 +4,7 @@ Draft Service
 """
 import json
 import re
+import os
 from pathlib import Path
 from typing import List, Optional, Dict, Any
 from datetime import datetime
@@ -12,10 +13,42 @@ from uuid import uuid4
 from ..models.user_script_schemas import Draft, UserScriptRunConfig
 
 
+def _get_default_storage_path() -> str:
+    """기본 저장 경로 결정"""
+    # 환경 변수에서 경로 가져오기
+    if "XGENML_DRAFT_STORAGE" in os.environ:
+        return os.environ["XGENML_DRAFT_STORAGE"]
+
+    # 프로젝트 루트 찾기
+    current_file = Path(__file__).resolve()
+    # src/xgenml/services/draft_service.py -> 프로젝트 루트
+    project_root = current_file.parent.parent.parent.parent
+
+    # 프로젝트 루트에 data 디렉토리 생성 시도
+    data_dir = project_root / "data" / "drafts"
+
+    try:
+        data_dir.mkdir(parents=True, exist_ok=True)
+        # 쓰기 권한 테스트
+        test_file = data_dir / ".write_test"
+        test_file.touch()
+        test_file.unlink()
+        return str(data_dir)
+    except (OSError, PermissionError):
+        # 권한 없으면 임시 디렉토리 사용
+        import tempfile
+        temp_dir = Path(tempfile.gettempdir()) / "xgenml-drafts"
+        temp_dir.mkdir(parents=True, exist_ok=True)
+        return str(temp_dir)
+
+
 class DraftService:
     """드래프트 관리 서비스"""
 
-    def __init__(self, storage_path: str = "./data/drafts"):
+    def __init__(self, storage_path: Optional[str] = None):
+        if storage_path is None:
+            storage_path = _get_default_storage_path()
+
         self.storage_path = Path(storage_path)
         self.storage_path.mkdir(parents=True, exist_ok=True)
         self.index_file = self.storage_path / "index.json"
