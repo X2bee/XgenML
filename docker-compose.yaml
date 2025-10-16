@@ -1,12 +1,10 @@
-name: xgenml
-
 services:
-  app:
+  xgenml:
     build:
       context: .
       dockerfile: Dockerfile
     image: xgenml:latest
-    container_name: xgenml-app
+    container_name: xgenml
     env_file: [.env]
     environment:
       ARTIFACT_BASE_URI: ${ARTIFACT_BASE_URI}
@@ -29,8 +27,6 @@ services:
 #    depends_on:
 #      minio:
 #        condition: service_healthy
-    profiles: ["default"]
-
 #  minio:
 #    image: quay.io/minio/minio:RELEASE.2025-01-05T00-00-00Z
 #    container_name: XgenML-minio
