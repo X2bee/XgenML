@@ -4,8 +4,9 @@ import json
 import tempfile
 import joblib
 import traceback
+import yaml
 from typing import Dict, Any, Optional, List
-from datetime import datetime
+from datetime import datetime, timezone
 import mlflow
 import mlflow.sklearn
 from mlflow.tracking import MlflowClient
@@ -270,6 +271,7 @@ class MLflowManager:
 
         logger.info(f"📦 UserScript 아티팩트 로깅 중... ({len(artifacts)}개)")
 
+        model_artifact = None
         for artifact in artifacts:
             artifact_path = artifact.get("path")
             artifact_name = artifact.get("name", "unnamed")
@@ -280,14 +282,66 @@ class MLflowManager:
                 continue
 
             try:
-                # 아티팩트 타입별로 디렉토리 구분
-                artifact_dir = f"user_script_artifacts/{artifact_type}"
+                # 모델 타입 아티팩트는 기존 코드와 호환되도록 model/ 경로에 저장
+                if artifact_type == "model":
+                    artifact_dir = "model"
+                    model_artifact = artifact  # 나중에 MLmodel 파일 생성용으로 저장
+                else:
+                    # 다른 아티팩트는 user_script_artifacts 하위에 저장
+                    artifact_dir = f"user_script_artifacts/{artifact_type}"
+
                 mlflow.log_artifact(artifact_path, artifact_path=artifact_dir)
-                logger.info(f"  ✓ {artifact_name} ({artifact_type}): {artifact_path}")
+                logger.info(f"  ✓ {artifact_name} ({artifact_type}): {artifact_path} -> {artifact_dir}/")
             except Exception as e:
                 logger.error(f"  ✗ 아티팩트 로깅 실패 ({artifact_name}): {e}")
 
+        # 모델 아티팩트가 있으면 MLmodel 메타데이터 파일 생성
+        if model_artifact:
+            self._create_mlmodel_metadata_for_userscript(model_artifact)
+
         logger.info(f"✅ UserScript 아티팩트 로깅 완료")
+
+    def _create_mlmodel_metadata_for_userscript(self, model_artifact: Dict[str, Any]):
+        """UserScript 모델을 위한 MLmodel 메타데이터 파일 생성"""
+        try:
+            # MLmodel 메타데이터 생성
+            mlmodel_content = {
+                "artifact_path": "model",
+                "flavors": {
+                    "python_function": {
+                        "model_path": os.path.basename(model_artifact.get("path", "model.pkl")),
+                        "loader_module": "mlflow.pyfunc.model",
+                        "python_version": "3.9",
+                        "env": {
+                            "conda": "conda.yaml",
+                            "virtualenv": "python_env.yaml"
+                        }
+                    }
+                },
+                "model_uuid": model_artifact.get("name", "userscript_model"),
+                "utc_time_created": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S.%f"),
+                "mlflow_version": mlflow.__version__
+            }
+
+            # 임시 디렉토리 생성하고 MLmodel 파일 저장
+            temp_dir = tempfile.mkdtemp(prefix="mlmodel_")
+            temp_mlmodel_path = os.path.join(temp_dir, "MLmodel")
+
+            with open(temp_mlmodel_path, 'w') as f:
+                yaml.dump(mlmodel_content, f, default_flow_style=False)
+
+            # MLflow에 MLmodel 파일 로깅
+            mlflow.log_artifact(temp_mlmodel_path, artifact_path="model")
+
+            # 임시 디렉토리 정리
+            import shutil
+            shutil.rmtree(temp_dir, ignore_errors=True)
+
+            logger.info("✅ UserScript용 MLmodel 메타데이터 파일 생성 완료")
+
+        except Exception as e:
+            logger.error(f"❌ MLmodel 메타데이터 생성 실패: {e}")
+            # 실패해도 계속 진행 (모델 자체는 저장되어 있음)
     
     def _save_model(self, estimator, X_train, y_pred_test, input_schema=None, output_schema=None):
         """모델 저장 - 로컬 저장 후 MLflow 서버를 통해 업로드"""
