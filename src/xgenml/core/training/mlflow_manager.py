@@ -133,16 +133,20 @@ class MLflowManager:
                 output_schema=output_schema
             )
             
-            # 모델 저장 검증
+            # 모델 저장 검증 (UserScript는 MLmodel 파일이 없으므로 스킵)
             if model_saved:
                 logger.info("✅ 모델 아티팩트 저장 성공")
-                try:
-                    self.client.download_artifacts(run_id, "model/MLmodel", "/tmp")
-                    logger.info("✅ MLmodel 파일 확인됨")
-                except Exception as e:
-                    logger.error(f"❌ MLmodel 파일 없음: {e}")
-                    model_saved = False
-            
+                # estimator가 None이 아닌 경우에만 MLmodel 파일 검증
+                if estimator is not None:
+                    try:
+                        self.client.download_artifacts(run_id, "model/MLmodel", "/tmp")
+                        logger.info("✅ MLmodel 파일 확인됨")
+                    except Exception as e:
+                        logger.error(f"❌ MLmodel 파일 없음: {e}")
+                        model_saved = False
+                else:
+                    logger.info("✅ UserScript 아티팩트 저장됨 (MLmodel 검증 스킵)")
+
             return run_id, model_saved
 
     def _log_feature_encoding(self, run_id: str, label_info: Dict[str, Any]):

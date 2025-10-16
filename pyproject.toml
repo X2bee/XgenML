@@ -27,6 +27,8 @@ dependencies = [
   "transformers>=4.40.0",
   "optuna>=3.0.0",
   "datasets>=2.20.0",
+  "torch>=2.9.0",
+  "tensorflow>=2.20.0",
 ]
 
 [project.optional-dependencies]
