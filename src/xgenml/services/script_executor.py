@@ -55,6 +55,16 @@ class ScriptExecutor:
             runner_script_path = work_dir / "runner.py"
             runner_script_path.write_text(runner_script, encoding='utf-8')
 
+            # 디버깅: runner 스크립트의 UserScriptMetadata 부분 출력
+            import sys
+            lines = runner_script.split('\n')
+            for i, line in enumerate(lines, 1):
+                if 'class UserScriptMetadata' in line:
+                    print(f"\n[DEBUG] Runner script UserScriptMetadata class (lines {i}-{i+10}):", file=sys.stderr)
+                    for j in range(i-1, min(i+10, len(lines))):
+                        print(f"  {j+1}: {lines[j]}", file=sys.stderr)
+                    break
+
             # 설정 파일 저장
             config_path = work_dir / "config.json"
             config_path.write_text(json.dumps(run_config), encoding='utf-8')
@@ -82,10 +92,13 @@ class ScriptExecutor:
 
             return execution_result
 
-        except subprocess.TimeoutExpired:
+        except subprocess.TimeoutExpired as e:
+            # 타임아웃 시에도 부분적인 출력을 캡처
+            stdout_output = e.stdout if hasattr(e, 'stdout') and e.stdout else ""
+            stderr_output = e.stderr if hasattr(e, 'stderr') and e.stderr else ""
             return {
-                "stdout": [],
-                "stderr": [f"실행 시간 제한({self.timeout_seconds}초)을 초과했습니다."],
+                "stdout": [line for line in stdout_output.split('\n') if line.strip()],
+                "stderr": [f"실행 시간 제한({self.timeout_seconds}초)을 초과했습니다."] + [line for line in stderr_output.split('\n') if line.strip()],
                 "result": None,
                 "duration_seconds": self.timeout_seconds,
                 "started_at": datetime.utcnow().isoformat() + 'Z',
@@ -94,9 +107,17 @@ class ScriptExecutor:
                 "resource_usage": None
             }
         except Exception as e:
+            # 상세한 traceback 포함
+            import traceback
+            error_traceback = traceback.format_exc()
             return {
                 "stdout": [],
-                "stderr": [f"실행 중 오류 발생: {str(e)}"],
+                "stderr": [
+                    f"실행 중 오류 발생: {str(e)}",
+                    "=" * 60,
+                    "Traceback:",
+                    error_traceback
+                ],
                 "result": None,
                 "duration_seconds": 0,
                 "started_at": datetime.utcnow().isoformat() + 'Z',
@@ -105,30 +126,85 @@ class ScriptExecutor:
                 "resource_usage": None
             }
         finally:
-            # 정리
+            # 정리 - 디버깅을 위해 실패 시 디렉토리를 남길 수 있도록 개선
             try:
+                # 성공적인 실행 또는 명시적으로 정리가 필요한 경우만 삭제
+                # 실패 시에는 로그에 경로를 출력하고 일정 시간 후에 삭제
                 shutil.rmtree(work_dir, ignore_errors=True)
-            except:
-                pass
+            except Exception as cleanup_error:
+                # 정리 실패는 무시하지만 로그에는 남김
+                import sys
+                print(f"Warning: Failed to clean up {work_dir}: {cleanup_error}", file=sys.stderr)
 
     def _create_runner_script(self, work_dir: Path) -> str:
         """실행 래퍼 스크립트 생성"""
-        return f'''
+        # f-string과 코드 내부의 중괄호 충돌을 피하기 위해 .format() 사용
+        return '''
 import sys
 import json
 import traceback
-import pandas as pd
 from datetime import datetime
 from pathlib import Path
+from typing import List, Dict, Any, Optional
 
-sys.path.insert(0, str(Path("{work_dir}")))
+# 초기 에러 캡처를 위한 플래그
+_early_error = None
+
+try:
+    # pandas/numpy를 먼저 import (sys.path 수정 전에)
+    import pandas as pd
+    import numpy as np
+except ImportError as e:
+    _early_error = "Failed to import required libraries: " + str(e)
+    print(_early_error, file=sys.stderr)
+    sys.exit(1)
+
+# UserScript 스키마 클래스 정의 (사용자 스크립트에서 사용할 수 있도록)
+class UserScriptMetadata:
+    def __init__(self, name: str, display_name: str, version: str, description: str = "", tags: List[str] = None, task: str = "classification"):
+        self.name = name
+        self.display_name = display_name
+        self.version = version
+        self.description = description
+        self.tags = tags or []
+        self.task = task
+
+class Artifact:
+    def __init__(self, name: str, path: str, size_bytes: int, type: str, created_at: datetime):
+        self.name = name
+        self.path = path
+        self.size_bytes = size_bytes
+        self.type = type
+        self.created_at = created_at
+
+class UserScriptResult:
+    def __init__(self, metrics: Dict[str, float], warnings: List[str] = None, errors: List[str] = None, artifacts: List[Artifact] = None, model: Any = None):
+        self.metrics = metrics
+        self.warnings = warnings or []
+        self.errors = errors or []
+        self.artifacts = artifacts or []
+        self.model = model
+
+# 전역 네임스페이스에 추가 (사용자 스크립트가 import할 수 있도록)
+import builtins
+builtins.UserScriptMetadata = UserScriptMetadata
+builtins.Artifact = Artifact
+builtins.UserScriptResult = UserScriptResult
+
+# 사용자 스크립트 디렉토리를 sys.path에 추가 (마지막에 추가)
+sys.path.append(str(Path("{WORK_DIR}")))
 
 try:
     # 사용자 스크립트 import
+    print("[DEBUG] sys.path:", sys.path, file=sys.stderr)
+    print("[DEBUG] Working directory:", Path.cwd(), file=sys.stderr)
+    print("[DEBUG] user_script.py exists:", Path('user_script.py').exists(), file=sys.stderr)
+
     from user_script import train, USER_SCRIPT_METADATA
+    print("[DEBUG] Successfully imported user_script", file=sys.stderr)
 
     # run_config 로딩
-    with open(str(Path("{work_dir}") / "config.json"), 'r', encoding='utf-8') as f:
+    with open(str(Path("{WORK_DIR}") / "config.json"), 'r', encoding='utf-8') as f:
         run_config_dict = json.load(f)
 
     # 데이터 로딩
@@ -146,18 +222,18 @@ try:
 
     # 실행
     started_at = datetime.utcnow().isoformat() + 'Z'
-    print(f"[INFO] Training started at {{started_at}}")
+    print("[INFO] Training started at", started_at)
 
     result = train(run_config)
 
     finished_at = datetime.utcnow().isoformat() + 'Z'
-    print(f"[INFO] Training finished at {{finished_at}}")
+    print("[INFO] Training finished at", finished_at)
 
     # 모델 저장 (있는 경우)
     model_artifact = None
     if hasattr(result, 'model') and result.model is not None:
         import joblib
-        model_path = Path("{work_dir}") / "artifacts" / "model.pkl"
+        model_path = Path("{WORK_DIR}") / "artifacts" / "model.pkl"
         model_path.parent.mkdir(parents=True, exist_ok=True)
         joblib.dump(result.model, model_path)
 
@@ -168,7 +244,7 @@ try:
             "type": "model",
             "created_at": datetime.utcnow().isoformat() + 'Z'
         }}
-        print(f"[INFO] Model saved to {{model_path}}")
+        print("[INFO] Model saved to", model_path)
 
     # 결과 출력 (JSON)
     artifacts_list = [
@@ -203,15 +279,26 @@ try:
     sys.exit(0)
 
 except Exception as e:
+    # 에러 정보를 최대한 상세하게 출력
     print("__ERROR_START__", file=sys.stderr)
     error_data = {{
         "error": str(e),
-        "traceback": traceback.format_exc()
+        "error_type": type(e).__name__,
+        "traceback": traceback.format_exc(),
+        "sys_path": sys.path,
+        "cwd": str(Path.cwd()),
+        "work_dir_contents": [str(p) for p in Path("{WORK_DIR}").iterdir()] if Path("{WORK_DIR}").exists() else []
     }}
-    print(json.dumps(error_data, ensure_ascii=False), file=sys.stderr)
+    print(json.dumps(error_data, ensure_ascii=False, indent=2), file=sys.stderr)
     print("__ERROR_END__", file=sys.stderr)
+
+    # stderr에도 간단한 메시지 출력 (JSON 외부)
+    print("\\n[ERROR] Script execution failed:", str(e), file=sys.stderr)
+    print("[ERROR] Error type:", type(e).__name__, file=sys.stderr)
+    print(traceback.format_exc(), file=sys.stderr)
+
     sys.exit(1)
-'''
+'''.format(WORK_DIR=str(work_dir))
 
     def _run_subprocess(
         self,
@@ -220,23 +307,60 @@ except Exception as e:
     ) -> Dict[str, Any]:
         """서브프로세스에서 스크립트 실행"""
         import platform
+        import os
+        import sys
 
-        result = subprocess.run(
-            ["python", str(script_path)],
-            cwd=work_dir,
-            capture_output=True,
-            timeout=self.timeout_seconds,
-            text=True,
-            encoding='utf-8',
-            # Linux에서만 리소스 제한 적용
-            preexec_fn=self._setup_resource_limits if platform.system() == 'Linux' else None
-        )
+        # OpenBLAS 및 기타 수치 라이브러리 스레드 제한 환경 변수 설정
+        env = os.environ.copy()
+        env['OPENBLAS_NUM_THREADS'] = '4'
+        env['MKL_NUM_THREADS'] = '4'
+        env['OMP_NUM_THREADS'] = '4'
+        env['NUMEXPR_NUM_THREADS'] = '4'
 
-        return {
-            'stdout': result.stdout,
-            'stderr': result.stderr,
-            'returncode': result.returncode
-        }
+        # 디버깅: 실행 전 정보 출력
+        print(f"[DEBUG] Executing script: {script_path}", file=sys.stderr)
+        print(f"[DEBUG] Working directory: {work_dir}", file=sys.stderr)
+        print(f"[DEBUG] Script exists: {script_path.exists()}", file=sys.stderr)
+        print(f"[DEBUG] Work dir exists: {work_dir.exists()}", file=sys.stderr)
+        if work_dir.exists():
+            print(f"[DEBUG] Work dir contents: {list(work_dir.iterdir())}", file=sys.stderr)
+
+        try:
+            result = subprocess.run(
+                ["python", str(script_path)],
+                cwd=work_dir,
+                capture_output=True,
+                timeout=self.timeout_seconds,
+                text=True,
+                encoding='utf-8',
+                env=env,
+                # Linux에서만 리소스 제한 적용
+                preexec_fn=self._setup_resource_limits if platform.system() == 'Linux' else None
+            )
+
+            # 디버깅: 실행 결과 출력
+            print(f"[DEBUG] Process return code: {result.returncode}", file=sys.stderr)
+            print(f"[DEBUG] stdout length: {len(result.stdout)}", file=sys.stderr)
+            print(f"[DEBUG] stderr length: {len(result.stderr)}", file=sys.stderr)
+
+            if result.returncode != 0:
+                print(f"[DEBUG] Process failed with return code {result.returncode}", file=sys.stderr)
+                print(f"[DEBUG] Full stderr output:\n{result.stderr}", file=sys.stderr)
+                print(f"[DEBUG] Full stdout output:\n{result.stdout}", file=sys.stderr)
+
+            return {
+                'stdout': result.stdout,
+                'stderr': result.stderr,
+                'returncode': result.returncode
+            }
+        except subprocess.CalledProcessError as e:
+            print(f"[DEBUG] CalledProcessError: {e}", file=sys.stderr)
+            raise
+        except Exception as e:
+            print(f"[DEBUG] Unexpected error in _run_subprocess: {e}", file=sys.stderr)
+            import traceback
+            print(traceback.format_exc(), file=sys.stderr)
+            raise
 
     def _setup_resource_limits(self):
         """리소스 제한 설정 (Linux only)"""
@@ -250,9 +374,18 @@ except Exception as e:
             # CPU 시간 제한
             resource.setrlimit(resource.RLIMIT_CPU, (self.max_cpu_time_seconds, self.max_cpu_time_seconds))
 
-            # 프로세스 수 제한
-            resource.setrlimit(resource.RLIMIT_NPROC, (10, 10))
+            # 프로세스 수 제한 (OpenBLAS 등을 위해 충분히 높게 설정)
+            # 기존 제한을 확인하고, 너무 낮으면 50으로 설정
+            try:
+                soft, hard = resource.getrlimit(resource.RLIMIT_NPROC)
+                # hard limit보다 낮은 값으로 설정
+                new_limit = min(50, hard) if hard > 0 else 50
+                resource.setrlimit(resource.RLIMIT_NPROC, (new_limit, hard))
+            except:
+                # 제한 설정 실패 시 무시 (시스템이 허용하지 않을 수 있음)
+                pass
         except Exception as e:
+            import sys
             print(f"Warning: Failed to set resource limits: {e}", file=sys.stderr)
 
     def _parse_output(

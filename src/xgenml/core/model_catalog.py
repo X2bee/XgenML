@@ -291,8 +291,12 @@ def get_models_by_tag(tag: str):
 
 def validate_model_name(task: str, model_name: str) -> bool:
     """모델 이름이 유효한지 확인"""
+    from src.xgenml.utils.logger_config import setup_logger
+    logger = setup_logger(__name__)
+
     # Check built-in models first
     if any(m["name"] == model_name for m in get_models_by_task(task)):
+        logger.info(f"✅ '{model_name}'은 빌트인 모델입니다 (task={task})")
         return True
 
     # Check for user script models (e.g., "my_model@1.0.0")
@@ -301,8 +305,29 @@ def validate_model_name(task: str, model_name: str) -> bool:
         if len(parts) == 2:
             name, version = parts
             registry = get_script_registry()
-            return registry.script_exists(name, version)
+            exists = registry.script_exists(name, version)
 
+            if exists:
+                # 추가로 task가 일치하는지 확인
+                script_info = registry.get_script(name, version)
+                if script_info:
+                    script_task = script_info.get("task")
+                    if script_task == task:
+                        logger.info(f"✅ '{model_name}'은 등록된 UserScript입니다 (task={task})")
+                        return True
+                    else:
+                        logger.warning(f"❌ '{model_name}'의 태스크가 일치하지 않습니다. 스크립트 task={script_task}, 요청된 task={task}")
+                        return False
+                else:
+                    logger.warning(f"❌ '{model_name}' 스크립트 정보를 가져올 수 없습니다")
+                    return False
+            else:
+                logger.warning(f"❌ '{model_name}' 스크립트가 레지스트리에 등록되지 않았습니다")
+                registered_scripts = [f"{s['name']}@{s['version']}" for s in registry.list_scripts()]
+                logger.info(f"등록된 스크립트 목록: {registered_scripts}")
+                return False
+
+    logger.warning(f"❌ '{model_name}'은 인식할 수 없는 모델 이름입니다 (task={task})")
     return False
 
 

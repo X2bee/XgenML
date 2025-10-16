@@ -222,15 +222,16 @@ def train_from_hf(
         results = []
         best = None
         best_score = -1e18 if task == "regression" else -1.0
-        
+        failed_models = []  # 실패한 모델 추적
+
         logger.info(f"\n모델 학습 시작 ({len(model_names)}개 모델)")
         logger.info(f"평가 지표: {best_key}")
-        
+
         for idx, name in enumerate(model_names, 1):
             logger.info(f"\n{'=' * 60}")
             logger.info(f"[{idx}/{len(model_names)}] {name} 학습 중...")
             logger.info(f"{'=' * 60}")
-            
+
             try:
                 summary = trainer.train_model(
                     model_name=name,
@@ -247,13 +248,14 @@ def train_from_hf(
                     input_schema=input_schema,
                     output_schema=output_schema
                 )
-                
+
                 results.append(summary)
 
                 # 메트릭이 존재하는지 확인
                 if best_key not in summary["metrics"]["test"]:
                     logger.error(f"{name} 모델의 '{best_key}' 메트릭이 없습니다.")
                     logger.error(f"사용 가능한 메트릭: {list(summary['metrics']['test'].keys())}")
+                    failed_models.append((name, f"메트릭 '{best_key}' 없음"))
                     continue
 
                 score = summary["metrics"]["test"][best_key]
@@ -262,15 +264,24 @@ def train_from_hf(
                     best = summary
                     hpo_info = f" (HPO)" if summary.get("hpo_used") else ""
                     logger.info(f"새로운 베스트 모델: {name}{hpo_info} ({best_key}={score:.4f})")
-                
+
             except Exception as e:
-                logger.error(f"{name} 모델 학습 실패: {str(e)}")
+                error_msg = str(e)
+                logger.error(f"{name} 모델 학습 실패: {error_msg}")
                 import traceback
                 logger.error(traceback.format_exc())
+                failed_models.append((name, error_msg))
                 continue
-        
+
         if not best:
-            raise RuntimeError("모든 모델 학습이 실패했습니다")
+            # 실패 원인 요약
+            failure_summary = "\n".join([f"  - {name}: {reason}" for name, reason in failed_models])
+            raise RuntimeError(
+                f"모든 모델 학습이 실패했습니다.\n"
+                f"시도한 모델: {len(model_names)}개\n"
+                f"실패 상세:\n{failure_summary}\n"
+                f"위 로그를 확인하여 상세한 에러를 확인하세요."
+            )
         
         hpo_info = f" (HPO)" if best.get("hpo_used") else ""
         logger.info(f"\n{'=' * 80}")

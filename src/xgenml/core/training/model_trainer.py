@@ -102,7 +102,8 @@ class ModelTrainer:
                     execution_result = script_executor.execute(estimator.model_info['content'], run_config)
 
                 # 실행 결과 확인
-                logger.info(f"UserScript 실행 결과: {execution_result.keys()}")
+                logger.info(f"UserScript 실행 결과 키: {execution_result.keys()}")
+                logger.info(f"UserScript 전체 실행 결과: {execution_result}")
 
                 result_data = execution_result.get("result") or {}
                 raw_metrics = result_data.get("metrics", {})
@@ -113,22 +114,37 @@ class ModelTrainer:
                 stderr = execution_result.get("stderr", [])
                 exit_code = execution_result.get("exit_code", -1)
 
+                # 항상 stdout/stderr 출력 (디버깅용)
+                logger.info("=" * 80)
+                logger.info("UserScript stdout:")
                 if stdout:
-                    logger.info("UserScript stdout:")
                     for line in stdout:
                         logger.info(f"  {line}")
+                else:
+                    logger.info("  (비어있음)")
 
+                logger.warning("UserScript stderr:")
                 if stderr:
-                    logger.warning("UserScript stderr:")
                     for line in stderr:
                         logger.warning(f"  {line}")
+                else:
+                    logger.warning("  (비어있음)")
 
                 logger.info(f"UserScript exit code: {exit_code}")
+                logger.info("=" * 80)
 
                 # 에러가 있으면 예외 발생
                 if exit_code != 0:
-                    error_msg = "\n".join(stderr) if stderr else "Unknown error"
-                    raise RuntimeError(f"UserScript 실행 실패 (exit_code={exit_code}): {error_msg}")
+                    # stderr와 stdout 모두 확인
+                    error_lines = []
+                    if stderr:
+                        error_lines.extend(stderr)
+                    if stdout and not stderr:
+                        # stderr가 비어있으면 stdout도 확인
+                        error_lines.extend(stdout)
+
+                    error_msg = "\n".join(error_lines) if error_lines else f"실행 실패 (상세 정보 없음). execution_result: {execution_result}"
+                    raise RuntimeError(f"UserScript 실행 실패 (exit_code={exit_code}):\n{error_msg}")
 
                 if not raw_metrics:
                     logger.error("UserScript가 메트릭을 반환하지 않았습니다!")
